@@ -1,0 +1,47 @@
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+*.env
+
+# Python Virtual Environments
+venv/
+.venv/
+env/
+*/venv/
+*/.venv/
+
+# Node dependencies and build artifacts
+node_modules/
+*/node_modules/
+dist/
+*/dist/
+
+# Local Portable PostgreSQL Binaries and Cluster Data
+pgsql/
+*/pgsql/
+
+# Python bytecode and caches
+__pycache__/
+*/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*/.pytest_cache/
+.coverage
+htmlcov/
+
+# User uploads and runtime files
+uploads/resumes/*
+!uploads/resumes/.gitkeep
+backend/uploads/resumes/*
+!backend/uploads/resumes/.gitkeep
+*.log
+
+# IDE and OS metadata
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
