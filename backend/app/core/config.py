@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import Any, List, Union
 from pydantic import AnyHttpUrl, EmailStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -32,8 +32,8 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str | None = None
     GEMINI_MODEL: str = "gemini-2.0-flash"
 
-    # CORS
-    BACKEND_CORS_ORIGINS: List[str] = [
+    # CORS: Accepts List[str] or raw string like "*" or comma-separated origins
+    BACKEND_CORS_ORIGINS: Union[List[str], str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:5173",
@@ -59,16 +59,23 @@ class Settings(BaseSettings):
         return v or ""
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
-    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+    def assemble_cors_origins(cls, v: Any) -> List[str]:
         if isinstance(v, str):
-            import json
-            if v.startswith("[") and v.endswith("]"):
+            v_str = v.strip()
+            if not v_str:
+                return ["*"]
+            if v_str.startswith("[") and v_str.endswith("]"):
+                import json
                 try:
-                    return json.loads(v)
+                    loaded = json.loads(v_str)
+                    if isinstance(loaded, list):
+                        return [str(i).strip() for i in loaded if i]
                 except Exception:
                     pass
-            return [i.strip() for i in v.split(",") if i.strip()]
-        return v
+            return [i.strip() for i in v_str.split(",") if i.strip()]
+        elif isinstance(v, (list, tuple)):
+            return [str(i).strip() for i in v if i]
+        return ["*"]
 
     model_config = SettingsConfigDict(
         env_file=".env",
