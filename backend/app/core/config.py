@@ -1,4 +1,5 @@
 from typing import Any, List, Union
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from pydantic import AnyHttpUrl, EmailStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -42,15 +43,44 @@ class Settings(BaseSettings):
 
     @field_validator("DATABASE_URL", mode="before")
     def assemble_async_db_url(cls, v: str | None) -> str:
-        if isinstance(v, str):
-            if v.startswith("postgres://"):
-                v = v.replace("postgres://", "postgresql+asyncpg://", 1)
-            elif v.startswith("postgresql://") and not v.startswith("postgresql+"):
-                v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
-            # asyncpg does not accept 'sslmode' query param, it expects 'ssl'
-            if "sslmode=" in v:
-                v = v.replace("sslmode=", "ssl=")
-        return v or ""
+        if not v or not isinstance(v, str):
+            return v or ""
+        url = v.strip()
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgresql://") and not url.startswith("postgresql+"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+        parsed = urlsplit(url)
+        query_params = parse_qsl(parsed.query, keep_blank_values=True)
+
+        allowed_asyncpg_params = {
+            "timeout", "command_timeout", "statement_cache_size",
+            "max_cached_statement_lifetime", "max_cacheable_statement_size",
+            "target_session_attrs", "direct_tls"
+        }
+
+        new_params = []
+        ssl_set = False
+        for k, val in query_params:
+            k_lower = k.lower()
+            if k_lower in ("sslmode", "ssl"):
+                if val.lower() in ("require", "verify-ca", "verify-full", "true", "1"):
+                    new_params.append(("ssl", "require"))
+                    ssl_set = True
+                elif val.lower() in ("disable", "false", "0"):
+                    new_params.append(("ssl", "disable"))
+                    ssl_set = True
+            elif k_lower in allowed_asyncpg_params:
+                new_params.append((k, val))
+            # Parameters like channel_binding, options, gssencmode are ignored for asyncpg
+
+        # Ensure cloud-hosted databases (Neon, Render, Supabase) connect over SSL
+        if not ssl_set and any(host in parsed.netloc for host in ("neon.tech", "render.com", "supabase.co")):
+            new_params.append(("ssl", "require"))
+
+        new_query = urlencode(new_params)
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
 
     @field_validator("SYNC_DATABASE_URL", mode="before")
     def assemble_sync_db_url(cls, v: str | None) -> str:
