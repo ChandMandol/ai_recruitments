@@ -773,3 +773,4 @@ async def process_candidate_answer(
         "next_question": next_question,
         "summary_report": assessment.summary_report,
     }
+

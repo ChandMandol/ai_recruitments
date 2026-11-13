@@ -70,3 +70,4 @@ class AdaptiveAssessment(Base, UUIDMixin, TimestampMixin):
 
     # Relationships
     candidate: Mapped["User"] = relationship("User", backref="adaptive_assessments")
+

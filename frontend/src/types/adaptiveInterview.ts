@@ -65,3 +65,4 @@ export interface AnswerEvaluationResponse {
   next_question?: QuestionDetail | null;
   summary_report?: SummaryReport | null;
 }
+

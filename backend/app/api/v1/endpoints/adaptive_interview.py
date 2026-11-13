@@ -384,3 +384,4 @@ async def get_assessment_summary(
         await db.commit()
 
     return assessment.summary_report
+

@@ -48,3 +48,4 @@ export const adaptiveInterviewApi = {
     return res.data;
   },
 };
+
