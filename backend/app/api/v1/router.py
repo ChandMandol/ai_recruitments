@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from app.api.v1.endpoints import (
+    adaptive_interview,
     admin,
     applications,
     auth,
@@ -20,4 +21,5 @@ api_router.include_router(interviews.router, prefix="/interviews", tags=["Interv
 api_router.include_router(notifications.router, prefix="", tags=["Notifications"])
 api_router.include_router(admin.router, prefix="/admin", tags=["Admin Portal"])
 api_router.include_router(candidate.router, prefix="/candidate", tags=["Candidate Portal"])
+api_router.include_router(adaptive_interview.router, prefix="/adaptive-interview", tags=["Adaptive AI Assessment"])
 

@@ -1,4 +1,9 @@
 from app.core.database import Base
+from app.models.adaptive_assessment import (
+    AdaptiveAssessment,
+    AssessmentLevel,
+    AssessmentStatus,
+)
 from app.models.analysis import CVAnalysisReport, SystemSetting
 from app.models.application import ApplicationStatus, JobApplication
 from app.models.candidate import CandidateProfile
@@ -10,7 +15,10 @@ from app.models.notification import Notification, NotificationType
 from app.models.user import User, UserRole
 
 __all__ = [
+    "AdaptiveAssessment",
     "ApplicationStatus",
+    "AssessmentLevel",
+    "AssessmentStatus",
     "Base",
     "CVAnalysisReport",
     "CandidateProfile",
