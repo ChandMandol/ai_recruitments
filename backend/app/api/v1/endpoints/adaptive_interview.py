@@ -315,10 +315,11 @@ async def submit_assessment_answer(
 @router.post("/{assessment_id}/end", response_model=AssessmentResponse)
 async def end_assessment_manually(
     assessment_id: str,
+    reason: Optional[str] = None,
     current_candidate: User = Depends(get_current_candidate),
     db: AsyncSession = Depends(get_db),
 ):
-    """Allow candidate to gracefully conclude the interview early and generate summary."""
+    """Allow candidate to conclude the interview early or terminate for proctoring flag."""
     stmt = select(AdaptiveAssessment).where(
         AdaptiveAssessment.id == assessment_id,
         AdaptiveAssessment.candidate_id == current_candidate.id,
@@ -332,9 +333,12 @@ async def end_assessment_manually(
         )
 
     if assessment.status == AssessmentStatus.IN_PROGRESS.value:
-        assessment.status = AssessmentStatus.COMPLETED.value
+        is_proctor_flag = bool(reason and ("proctoring" in reason.lower() or "tab switch" in reason.lower()))
+        assessment.status = (
+            AssessmentStatus.TERMINATED_EARLY.value if is_proctor_flag else AssessmentStatus.COMPLETED.value
+        )
         assessment.completed_at = datetime.now(timezone.utc)
-        assessment.termination_reason = "Session concluded by candidate."
+        assessment.termination_reason = reason or "Session concluded by candidate."
         assessment.summary_report = generate_summary_report(assessment)
         flag_modified(assessment, "summary_report")
         await db.commit()

@@ -3,6 +3,15 @@ from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class CustomInterviewQuestion(BaseModel):
+    id: Optional[str] = None
+    question: str = Field(..., min_length=3, description="Interview question")
+    expected_answer: str = Field(..., min_length=3, description="Expected model answer")
+    keywords: Optional[List[str]] = Field(default_factory=list, description="Target keywords / concepts")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class JobBase(BaseModel):
     title: str = Field(..., min_length=2, max_length=255, description="Job Title")
     description: str = Field(..., min_length=5, description="Full job description")
@@ -17,6 +26,9 @@ class JobBase(BaseModel):
     application_deadline: Optional[datetime] = Field(None, description="Application submission deadline")
     department: Optional[str] = Field(None, description="Department or team (e.g. Engineering, AI)")
     location: Optional[str] = Field("Remote", description="Job location or Remote/Hybrid")
+    custom_interview_questions: Optional[List[CustomInterviewQuestion]] = Field(
+        default_factory=list, description="Admin configured benchmark interview questions with expected answers"
+    )
 
 
 class JobCreate(JobBase):
@@ -40,6 +52,7 @@ class JobUpdate(BaseModel):
     location: Optional[str] = None
     is_published: Optional[bool] = None
     status: Optional[str] = None
+    custom_interview_questions: Optional[List[CustomInterviewQuestion]] = None
 
 
 class JobStatusUpdate(BaseModel):

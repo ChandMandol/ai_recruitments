@@ -29,6 +29,17 @@ class Settings(BaseSettings):
     FIRST_SUPERADMIN_PASSWORD: str = "Admin@123456"
     FIRST_SUPERADMIN_NAME: str = "Platform Super Admin"
 
+    # Admin Registration Security Secret
+    ADMIN_INVITE_SECRET: str = "AdminSecretKey2026@Secure"
+
+    # Default SMTP Email Dispatcher Settings (can be overridden dynamically in Admin Dashboard)
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_NAME: str = "AI Recruitment Hub"
+    EMAILS_ENABLED: bool = False
+
     # AI Engine: Google Gemini API (Env Var or Vercel Environment Variable)
     GEMINI_API_KEY: str | None = None
     GEMINI_MODEL: str = "gemini-2.0-flash"
@@ -46,6 +57,8 @@ class Settings(BaseSettings):
         if not v or not isinstance(v, str):
             return v or ""
         url = v.strip()
+        if url.startswith("sqlite"):
+            return url
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql+asyncpg://", 1)
         elif url.startswith("postgresql://") and not url.startswith("postgresql+"):
@@ -111,7 +124,7 @@ class Settings(BaseSettings):
         return ["*"]
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=["backend/.env", ".env"],
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore"

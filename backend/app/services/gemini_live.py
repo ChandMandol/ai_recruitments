@@ -20,8 +20,18 @@ GEMINI_LIVE_WSS_URL = (
 GEMINI_MODEL = "models/gemini-2.0-flash-exp"
 
 
-def build_interview_system_prompt(job_title: str, candidate_name: str) -> str:
-    """Build a professional AI interviewer system prompt for the given position."""
+def build_interview_system_prompt(
+    job_title: str, candidate_name: str, custom_questions: Optional[list] = None
+) -> str:
+    """Build a professional AI interviewer system prompt for the given position, prioritizing benchmark questions."""
+    q_section = ""
+    if custom_questions:
+        q_list = "\n".join(
+            [f"- Question {i+1}: {q.get('question')}" for i, q in enumerate(custom_questions) if q.get("question")]
+        )
+        if q_list:
+            q_section = f"\nImportant: The recruiter has specified the following REQUIRED benchmark questions you must ask in order:\n{q_list}\n"
+
     return (
         f"You are Dr. Gemini, a professional AI technical interviewer at AI Recruitment Hub. "
         f"You are conducting a structured technical interview for the position of '{job_title}' "
@@ -29,6 +39,7 @@ def build_interview_system_prompt(job_title: str, candidate_name: str) -> str:
         f"Your responsibilities:\n"
         f"- Greet the candidate warmly by name and introduce yourself briefly.\n"
         f"- Ask ONE clear, focused question at a time — wait for the candidate to fully answer before continuing.\n"
+        f"{q_section}"
         f"- Start with an experience/background question, then progress to role-specific technical questions.\n"
         f"- Be professional, encouraging, and constructive. Acknowledge good answers briefly.\n"
         f"- If the candidate seems confused, offer a helpful clarification or rephrase.\n"
@@ -51,10 +62,12 @@ class GeminiLiveSession:
         api_key: str,
         job_title: str = "Software Engineer",
         candidate_name: str = "Candidate",
+        custom_questions: Optional[list] = None,
     ):
         self.api_key = api_key
         self.job_title = job_title
         self.candidate_name = candidate_name
+        self.custom_questions = custom_questions or []
         self._ws = None  # Gemini WebSocket connection
         self._connected = False
         self._setup_done = False
@@ -92,7 +105,7 @@ class GeminiLiveSession:
                         "parts": [
                             {
                                 "text": build_interview_system_prompt(
-                                    self.job_title, self.candidate_name
+                                    self.job_title, self.candidate_name, self.custom_questions
                                 )
                             }
                         ]

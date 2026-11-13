@@ -11,9 +11,22 @@ from app.models.application import ApplicationStatus, JobApplication
 from app.models.candidate import CandidateProfile
 from app.models.job import Job
 from app.models.user import User, UserRole
-from app.schemas.analysis import GeminiConfigResponse, GeminiConfigUpdate
-from app.schemas.auth import UserResponse
+from app.schemas.analysis import (
+    CloudinaryConfigResponse,
+    CloudinaryConfigUpdate,
+    GeminiConfigResponse,
+    GeminiConfigUpdate,
+    SmtpConfigResponse,
+    SmtpConfigUpdate,
+    SmtpTestRequest,
+)
+from app.schemas.auth import UserResponse, UserRoleUpdateRequest, UserStatusUpdateRequest
 from app.services.cv_analyzer import get_effective_gemini_api_key
+from app.services.email_service import get_smtp_config_from_db_or_env, send_smtp_test_email
+from app.services.storage_service import (
+    get_cloudinary_config_from_db_or_env,
+    test_cloudinary_connection,
+)
 
 router = APIRouter()
 
@@ -60,6 +73,115 @@ async def list_all_users(
     result = await db.execute(stmt)
     users = result.scalars().all()
     return [UserResponse.model_validate(u) for u in users]
+
+
+@router.patch("/users/{user_id}/status", response_model=UserResponse)
+async def update_user_status(
+    user_id: str,
+    payload: UserStatusUpdateRequest,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only: Block (deactivate) or unblock (activate) a user account."""
+    if current_admin.id == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot change the status of your own admin account.",
+        )
+
+    stmt = select(User).where(User.id == user_id)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    user.is_active = payload.is_active
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return UserResponse.model_validate(user)
+
+
+@router.patch("/users/{user_id}/role", response_model=UserResponse)
+async def update_user_role(
+    user_id: str,
+    payload: UserRoleUpdateRequest,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Super Admin / Admin endpoint to change user role (CANDIDATE, ADMIN, SUPER_ADMIN).
+    Super Admin can promote any user to Admin or demote Admin to Candidate.
+    """
+    if current_admin.id == user_id and payload.role.value != current_admin.role:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot change your own role.",
+        )
+
+    stmt = select(User).where(User.id == user_id)
+    result = await db.execute(stmt)
+    target_user = result.scalar_one_or_none()
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    # Permission check: Only SUPER_ADMIN can assign SUPER_ADMIN role
+    if payload.role == UserRole.SUPER_ADMIN and current_admin.role != UserRole.SUPER_ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only a Super Admin can grant Super Admin privileges.",
+        )
+
+    # Standard Admin cannot modify a Super Admin
+    if target_user.role == UserRole.SUPER_ADMIN.value and current_admin.role != UserRole.SUPER_ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only a Super Admin can modify another Super Admin account.",
+        )
+
+    target_user.role = payload.role.value
+    db.add(target_user)
+    await db.commit()
+    await db.refresh(target_user)
+    return UserResponse.model_validate(target_user)
+
+
+@router.delete("/users/{user_id}", response_model=Dict[str, Any])
+async def delete_user(
+    user_id: str,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only: Permanently delete a user and cascade remove all their data."""
+    if current_admin.id == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot delete your own admin account.",
+        )
+
+    stmt = select(User).where(User.id == user_id)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    user_email = user.email
+    await db.delete(user)
+    await db.commit()
+
+    return {
+        "success": True,
+        "message": f"User '{user_email}' and all associated profile, application, assessment, and interview records have been permanently removed.",
+    }
 
 
 @router.get("/settings/gemini", response_model=GeminiConfigResponse)
@@ -190,6 +312,132 @@ async def clear_gemini_config(
         await db.commit()
 
     return {"message": "Database Gemini API Key cleared. System will now use environment variables if present."}
+
+
+async def _upsert_system_setting(db: AsyncSession, key: str, value: str, is_secret: bool = False, description: str = ""):
+    stmt = select(SystemSetting).where(SystemSetting.key == key)
+    res = await db.execute(stmt)
+    setting = res.scalar_one_or_none()
+    if setting:
+        setting.value = value
+    else:
+        setting = SystemSetting(key=key, value=value, is_secret=is_secret, description=description)
+        db.add(setting)
+
+
+@router.get("/settings/smtp", response_model=SmtpConfigResponse)
+async def get_smtp_config(
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only: Retrieve current Gmail/SMTP email dispatcher configuration (password masked)."""
+    cfg = await get_smtp_config_from_db_or_env(db)
+    raw_pwd = cfg.get("password") or ""
+    masked = f"••••••••{raw_pwd[-4:]}" if len(raw_pwd) >= 4 else ("••••••••" if raw_pwd else None)
+
+    is_ready = bool(cfg["is_enabled"] and cfg["user"] and raw_pwd)
+    status_label = "Operational (Live Dispatch Active)" if is_ready else ("Disabled" if not cfg["is_enabled"] else "Incomplete Configuration (App Password Required)")
+
+    return SmtpConfigResponse(
+        host=cfg["host"],
+        port=cfg["port"],
+        user=cfg["user"],
+        has_password=bool(raw_pwd),
+        masked_password=masked,
+        from_name=cfg["from_name"],
+        is_enabled=cfg["is_enabled"],
+        source=cfg["source"],
+        status=status_label,
+    )
+
+
+@router.post("/settings/smtp", response_model=SmtpConfigResponse)
+async def update_smtp_config(
+    payload: SmtpConfigUpdate,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only: Configure and activate Gmail SMTP credentials dynamically from Admin Dashboard."""
+    await _upsert_system_setting(db, "SMTP_HOST", payload.host.strip(), False, "SMTP Host Server")
+    await _upsert_system_setting(db, "SMTP_PORT", str(payload.port), False, "SMTP Port")
+    await _upsert_system_setting(db, "SMTP_USER", payload.user.strip(), False, "SMTP Username / Gmail Address")
+
+    if payload.password and payload.password.strip():
+        await _upsert_system_setting(db, "SMTP_PASSWORD", payload.password.strip(), True, "SMTP App Password")
+
+    await _upsert_system_setting(db, "SMTP_FROM_NAME", (payload.from_name or "AI Recruitment Hub").strip(), False, "Sender Display Name")
+    await _upsert_system_setting(db, "EMAILS_ENABLED", "true" if payload.is_enabled else "false", False, "Global Email Dispatcher Active Toggle")
+
+    await db.commit()
+    return await get_smtp_config(current_admin=current_admin, db=db)
+
+
+@router.post("/settings/smtp/test")
+async def test_smtp_connection(
+    payload: SmtpTestRequest,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only: Send a live test email through configured SMTP to verify Gmail credentials."""
+    result = await send_smtp_test_email(to_email=payload.recipient_email.strip(), db=db)
+    return result
+
+
+@router.get("/settings/cloudinary", response_model=CloudinaryConfigResponse)
+async def get_cloudinary_config(
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only: Retrieve Cloudinary persistent cloud storage settings (secret masked)."""
+    cfg = await get_cloudinary_config_from_db_or_env(db)
+    raw_sec = cfg.get("api_secret") or ""
+    masked = f"••••••••{raw_sec[-4:]}" if len(raw_sec) >= 4 else ("••••••••" if raw_sec else None)
+
+    is_ready = bool(cfg["is_enabled"] and cfg["cloud_name"] and cfg["api_key"] and raw_sec)
+    status_label = (
+        "Operational (Cloud Storage Active)"
+        if is_ready
+        else ("Disabled (Using Local Disk Fallback)" if not cfg["is_enabled"] else "Incomplete Configuration")
+    )
+
+    return CloudinaryConfigResponse(
+        cloud_name=cfg["cloud_name"],
+        api_key=cfg["api_key"],
+        has_secret=bool(raw_sec),
+        masked_secret=masked,
+        is_enabled=cfg["is_enabled"],
+        source=cfg["source"],
+        status=status_label,
+    )
+
+
+@router.post("/settings/cloudinary", response_model=CloudinaryConfigResponse)
+async def update_cloudinary_config(
+    payload: CloudinaryConfigUpdate,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only: Configure and activate Cloudinary cloud storage from Admin Dashboard."""
+    await _upsert_system_setting(db, "CLOUDINARY_CLOUD_NAME", payload.cloud_name.strip(), False, "Cloudinary Cloud Name")
+    await _upsert_system_setting(db, "CLOUDINARY_API_KEY", payload.api_key.strip(), False, "Cloudinary API Key")
+
+    if payload.api_secret and payload.api_secret.strip():
+        await _upsert_system_setting(db, "CLOUDINARY_API_SECRET", payload.api_secret.strip(), True, "Cloudinary API Secret")
+
+    await _upsert_system_setting(db, "CLOUDINARY_ENABLED", "true" if payload.is_enabled else "false", False, "Cloudinary Active Toggle")
+
+    await db.commit()
+    return await get_cloudinary_config(current_admin=current_admin, db=db)
+
+
+@router.post("/settings/cloudinary/test")
+async def test_cloudinary_endpoint(
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only: Verify Cloudinary credentials with live ping."""
+    result = await test_cloudinary_connection(db=db)
+    return result
 
 
 @router.post("/seed-demo-data")

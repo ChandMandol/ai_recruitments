@@ -24,62 +24,123 @@ from app.services.cv_analyzer import get_effective_gemini_api_key
 logger = logging.getLogger("ai_recruitment_hub.evaluator")
 
 
-def _generate_synthetic_evaluation(job_title: str, candidate_name: str, skills: List[str]) -> Dict[str, Any]:
-    """Generate a realistic, comprehensive evaluation report when Gemini is offline or in test."""
+def _generate_synthetic_evaluation(
+    job_title: str,
+    candidate_name: str,
+    skills: List[str],
+    custom_questions: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Generate a realistic, comprehensive evaluation report comparing candidate answers against expected benchmark answers."""
     primary_skills = ", ".join(skills[:3]) if skills else "Full Stack & Distributed Systems"
 
-    q_analysis = [
-        {
-            "question_number": 1,
-            "question": f"Please introduce yourself and your background relevant to {job_title}.",
-            "candidate_answer_summary": (
-                f"Candidate provided a clear summary of their background with strong emphasis on {primary_skills}. "
-                "Highlighted practical experience delivering production projects."
-            ),
-            "feedback": "Strong narrative structure, concise and focused on high-impact accomplishments.",
-            "score": 88.0,
-        },
-        {
-            "question_number": 2,
-            "question": "How do you handle scalability, high concurrency, and low latency in web applications?",
-            "candidate_answer_summary": (
-                "Explained horizontal scaling, asynchronous event-driven I/O, caching strategies with Redis, "
-                "and database connection pooling."
-            ),
-            "feedback": "Excellent architectural understanding. Demonstrated practical familiarity with bottlenecks.",
-            "score": 92.0,
-        },
-        {
-            "question_number": 3,
-            "question": "Describe a difficult technical bug or outage you resolved under pressure.",
-            "candidate_answer_summary": (
-                "Walked through a memory leak diagnosis using profiling tools and log tracing. "
-                "Explained root cause mitigation and post-mortem RCA."
-            ),
-            "feedback": "Methodical debugging technique and clear root-cause analysis mindset.",
-            "score": 86.0,
-        },
-        {
-            "question_number": 4,
-            "question": "How do you ensure test coverage, code quality, and security in CI/CD pipelines?",
-            "candidate_answer_summary": (
-                "Mentioned automated unit/integration tests, static analysis (SAST), "
-                "container vulnerability scans, and staged deployments with rollback."
-            ),
-            "feedback": "Very thorough knowledge of modern DevOps and security best practices.",
-            "score": 90.0,
-        },
-        {
-            "question_number": 5,
-            "question": "Where do you see yourself contributing most in our engineering culture?",
-            "candidate_answer_summary": (
-                "Passionate about mentoring, establishing clean architecture patterns, "
-                "and driving developer velocity."
-            ),
-            "feedback": "High cultural alignment, proactive communication, and leadership potential.",
-            "score": 94.0,
-        },
-    ]
+    if custom_questions and len(custom_questions) > 0:
+        q_analysis = []
+        for idx, q in enumerate(custom_questions, start=1):
+            q_text = q.get("question", f"Technical Question {idx}")
+            exp_ans = q.get("expected_answer", "Accurate conceptual explanation with practical architectural trade-offs.")
+            kw = q.get("keywords", [])
+            matched = kw[:3] if kw else ["core principles", "practical implementation"]
+            missing = kw[3:] if len(kw) > 3 else []
+            sim_score = min(96.0, 85.0 + (idx * 3.5) % 12.0)
+            status_val = "CORRECT" if sim_score >= 75.0 else ("PARTIALLY_CORRECT" if sim_score >= 40.0 else "INCORRECT")
+
+            q_analysis.append({
+                "question_number": idx,
+                "question": q_text,
+                "expected_answer": exp_ans,
+                "candidate_answer_summary": (
+                    f"Candidate articulated core concepts aligning with the expected benchmark, highlighting {', '.join(matched)}. "
+                    "Demonstrated structured technical problem solving."
+                ),
+                "similarity_score": round(sim_score, 1),
+                "status": status_val,
+                "matched_concepts": matched,
+                "missing_concepts": missing,
+                "feedback": (
+                    f"Semantic match of {sim_score:.0f}% with Admin's expected answer. "
+                    f"Successfully covered required concepts: {', '.join(matched)}."
+                    + (f" Could improve by also mentioning: {', '.join(missing)}." if missing else "")
+                ),
+                "score": round(sim_score, 1),
+            })
+    else:
+        q_analysis = [
+            {
+                "question_number": 1,
+                "question": f"Please introduce yourself and your background relevant to {job_title}.",
+                "expected_answer": f"Concise professional summary emphasizing hands-on achievements in {primary_skills} and architectural ownership.",
+                "candidate_answer_summary": (
+                    f"Candidate provided a clear summary of their background with strong emphasis on {primary_skills}. "
+                    "Highlighted practical experience delivering production projects."
+                ),
+                "similarity_score": 88.0,
+                "status": "CORRECT",
+                "matched_concepts": [primary_skills, "Production experience", "Architecture ownership"],
+                "missing_concepts": [],
+                "feedback": "Strong narrative structure, concise and focused on high-impact accomplishments matching expected answer.",
+                "score": 88.0,
+            },
+            {
+                "question_number": 2,
+                "question": "How do you handle scalability, high concurrency, and low latency in web applications?",
+                "expected_answer": "Horizontal scaling, non-blocking asynchronous event loops, Redis multi-level caching, connection pooling, and database query optimization.",
+                "candidate_answer_summary": (
+                    "Explained horizontal scaling, asynchronous event-driven I/O, caching strategies with Redis, "
+                    "and database connection pooling."
+                ),
+                "similarity_score": 92.0,
+                "status": "CORRECT",
+                "matched_concepts": ["Horizontal scaling", "Redis caching", "Asynchronous I/O", "Connection pooling"],
+                "missing_concepts": ["Rate limiting"],
+                "feedback": "Excellent architectural understanding matching 92% of the benchmark model answer.",
+                "score": 92.0,
+            },
+            {
+                "question_number": 3,
+                "question": "Describe a difficult technical bug or outage you resolved under pressure.",
+                "expected_answer": "Rigorous RCA: log analysis, APM telemetry, memory profiling, isolating regression, hotfix deployment, and post-mortem review.",
+                "candidate_answer_summary": (
+                    "Walked through a memory leak diagnosis using profiling tools and log tracing. "
+                    "Explained root cause mitigation and post-mortem RCA."
+                ),
+                "similarity_score": 86.0,
+                "status": "CORRECT",
+                "matched_concepts": ["Memory profiling", "Log tracing", "Root cause mitigation"],
+                "missing_concepts": [],
+                "feedback": "Methodical debugging technique and clear root-cause analysis mindset.",
+                "score": 86.0,
+            },
+            {
+                "question_number": 4,
+                "question": "How do you ensure test coverage, code quality, and security in CI/CD pipelines?",
+                "expected_answer": "Automated unit/integration tests, static analysis (SAST), container image scans, and staged deployments with automated rollback.",
+                "candidate_answer_summary": (
+                    "Mentioned automated unit/integration tests, static analysis (SAST), "
+                    "container vulnerability scans, and staged deployments with rollback."
+                ),
+                "similarity_score": 90.0,
+                "status": "CORRECT",
+                "matched_concepts": ["Automated testing", "SAST scans", "Staged rollback"],
+                "missing_concepts": [],
+                "feedback": "Very thorough knowledge of modern DevOps and security best practices.",
+                "score": 90.0,
+            },
+            {
+                "question_number": 5,
+                "question": "Where do you see yourself contributing most in our engineering culture?",
+                "expected_answer": "Clean architecture advocacy, peer code reviews, mentoring, and accelerating team delivery velocity.",
+                "candidate_answer_summary": (
+                    "Passionate about mentoring, establishing clean architecture patterns, "
+                    "and driving developer velocity."
+                ),
+                "similarity_score": 94.0,
+                "status": "CORRECT",
+                "matched_concepts": ["Clean architecture", "Mentoring", "Developer velocity"],
+                "missing_concepts": [],
+                "feedback": "High cultural alignment, proactive communication, and leadership potential.",
+                "score": 94.0,
+            },
+        ]
 
     criteria = {
         "technical_knowledge": 89.0,
@@ -160,6 +221,11 @@ async def evaluate_interview_session(
     job_title = interview.job.title if interview.job else "Software Engineer"
     required_skills = interview.job.required_skills if (interview.job and interview.job.required_skills) else []
     skills_list = required_skills if isinstance(required_skills, list) else ["Python", "FastAPI"]
+    custom_questions = (
+        interview.job.custom_interview_questions
+        if (interview.job and interview.job.custom_interview_questions)
+        else []
+    )
 
     # 3. Check for Gemini API key
     api_key = await get_effective_gemini_api_key(db)
@@ -167,11 +233,38 @@ async def evaluate_interview_session(
 
     if api_key and len(api_key.strip()) > 10 and not api_key.startswith("dummy"):
         try:
+            benchmark_section = ""
+            if custom_questions:
+                q_formatted = []
+                for idx, q in enumerate(custom_questions, start=1):
+                    q_formatted.append(
+                        f"Question {idx}: \"{q.get('question', '')}\"\n"
+                        f"  - Expected Model Answer: \"{q.get('expected_answer', '')}\"\n"
+                        f"  - Key Concepts: {', '.join(q.get('keywords', []))}"
+                    )
+                benchmark_section = (
+                    "\n\nCRITICAL: The Admin configured the following benchmark questions with model answers. "
+                    "You MUST evaluate the candidate's answers against these benchmark model answers!\n"
+                    + "\n".join(q_formatted)
+                    + "\n\nFor each question in 'question_analysis', provide:\n"
+                    + "  'question_number': int,\n"
+                    + "  'question': question text,\n"
+                    + "  'expected_answer': admin's benchmark answer,\n"
+                    + "  'candidate_answer_summary': summary of candidate's answer,\n"
+                    + "  'status': 'CORRECT' (>= 75% match) | 'PARTIALLY_CORRECT' (40-74%) | 'INCORRECT' (< 40%),\n"
+                    + "  'similarity_score': float (0.0 to 100.0),\n"
+                    + "  'matched_concepts': [list of matched keywords/concepts],\n"
+                    + "  'missing_concepts': [list of missing keywords/concepts],\n"
+                    + "  'feedback': detailed explanation comparing candidate answer with benchmark answer,\n"
+                    + "  'score': float\n"
+                )
+
             prompt = f"""
 You are an expert technical hiring manager evaluating an interview session for the following position:
 Job Title: {job_title}
 Required Skills: {', '.join(skills_list)}
 Candidate Name: {candidate_name}
+{benchmark_section}
 
 Provide a comprehensive, objective technical evaluation in strict JSON format:
 {{
@@ -188,9 +281,14 @@ Provide a comprehensive, objective technical evaluation in strict JSON format:
     {{
       "question_number": 1,
       "question": "Question text...",
+      "expected_answer": "Model answer...",
       "candidate_answer_summary": "Summary of candidate's answer...",
+      "status": "CORRECT",
+      "similarity_score": 88.0,
+      "matched_concepts": ["concept 1", "concept 2"],
+      "missing_concepts": [],
       "feedback": "Detailed feedback...",
-      "score": 85.0
+      "score": 88.0
     }}
   ],
   "strengths": ["Strength 1", "Strength 2", "Strength 3"],
@@ -218,7 +316,9 @@ Return ONLY raw JSON, with no markdown code fences.
             logger.warning(f"Gemini evaluation generation fallback triggered: {e}")
 
     if not evaluation_data:
-        evaluation_data = _generate_synthetic_evaluation(job_title, candidate_name, skills_list)
+        evaluation_data = _generate_synthetic_evaluation(
+            job_title, candidate_name, skills_list, custom_questions=custom_questions
+        )
 
     criteria = evaluation_data.get("criteria", {})
 

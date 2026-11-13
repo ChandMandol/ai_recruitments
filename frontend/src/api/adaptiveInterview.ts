@@ -33,8 +33,12 @@ export const adaptiveInterviewApi = {
     return res.data;
   },
 
-  endAssessment: async (id: string): Promise<AssessmentResponse> => {
-    const res = await api.post<AssessmentResponse>(`/adaptive-interview/${id}/end`);
+  endAssessment: async (id: string, reason?: string): Promise<AssessmentResponse> => {
+    const res = await api.post<AssessmentResponse>(
+      `/adaptive-interview/${id}/end`,
+      null,
+      { params: reason ? { reason } : undefined }
+    );
     return res.data;
   },
 

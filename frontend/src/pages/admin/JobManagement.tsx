@@ -9,12 +9,13 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Sparkles,
   Trash2,
   Users,
   X,
 } from 'lucide-react';
 import { Alert } from '../../components/Alert';
-import { jobsApi, type Job, type JobCreateData } from '../../api/jobs';
+import { jobsApi, type Job, type JobCreateData, type CustomInterviewQuestion } from '../../api/jobs';
 
 export const JobManagement: React.FC = () => {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -50,6 +51,50 @@ export const JobManagement: React.FC = () => {
   };
   const [formData, setFormData] = useState<JobCreateData>(initialFormState);
   const [skillsInput, setSkillsInput] = useState('');
+  const [customQuestions, setCustomQuestions] = useState<CustomInterviewQuestion[]>([]);
+
+  const samplePresets: CustomInterviewQuestion[] = [
+    {
+      question: 'How do you approach database indexing and query optimization?',
+      expected_answer: 'B-Tree indexing avoids full table scan, reduces disk I/O, gives O(log N) lookup time. Write operations (INSERT/UPDATE) have overhead due to index maintenance.',
+      keywords: ['B-Tree', 'table scan', 'disk I/O', 'O(log N)', 'write overhead'],
+    },
+    {
+      question: 'Explain how you handle concurrency, race conditions, and idempotency in distributed APIs.',
+      expected_answer: 'Use database row-level locking (SELECT FOR UPDATE) or optimistic locking with version columns, distributed Redis mutex/Redlock, and idempotent request keys to prevent duplicate operations.',
+      keywords: ['optimistic locking', 'row lock', 'idempotency key', 'Redis lock', 'race condition'],
+    },
+    {
+      question: 'What is your strategy for automated testing and zero-downtime deployment in CI/CD?',
+      expected_answer: 'Comprehensive unit and integration test suites, static analysis, containerized builds, blue-green or rolling canary deployments with automated health checks and instant rollback triggers.',
+      keywords: ['unit tests', 'blue-green', 'canary', 'health checks', 'automated rollback'],
+    },
+  ];
+
+  const handleAddQuestion = () => {
+    setCustomQuestions([
+      ...customQuestions,
+      { question: '', expected_answer: '', keywords: [] },
+    ]);
+  };
+
+  const handleRemoveQuestion = (index: number) => {
+    setCustomQuestions(customQuestions.filter((_, i) => i !== index));
+  };
+
+  const handleUpdateQuestion = (
+    index: number,
+    field: keyof CustomInterviewQuestion,
+    value: any
+  ) => {
+    const updated = [...customQuestions];
+    updated[index] = { ...updated[index], [field]: value };
+    setCustomQuestions(updated);
+  };
+
+  const handleLoadSampleQuestions = () => {
+    setCustomQuestions(samplePresets);
+  };
 
   // Fetch jobs
   const fetchJobs = async () => {
@@ -83,6 +128,7 @@ export const JobManagement: React.FC = () => {
     setEditingJob(null);
     setFormData(initialFormState);
     setSkillsInput('');
+    setCustomQuestions([]);
     setShowModal(true);
   };
 
@@ -105,6 +151,7 @@ export const JobManagement: React.FC = () => {
       is_published: job.is_published,
     });
     setSkillsInput((job.required_skills || []).join(', '));
+    setCustomQuestions(job.custom_interview_questions || []);
     setShowModal(true);
   };
 
@@ -117,6 +164,17 @@ export const JobManagement: React.FC = () => {
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
 
+    const validQuestions = customQuestions
+      .filter((q) => q.question.trim().length > 0)
+      .map((q) => ({
+        ...q,
+        keywords: Array.isArray(q.keywords)
+          ? q.keywords
+          : typeof q.keywords === 'string'
+          ? (q.keywords as string).split(',').map((k: string) => k.trim()).filter((k: string) => k.length > 0)
+          : [],
+      }));
+
     const payload: JobCreateData = {
       ...formData,
       required_skills: skillsArray,
@@ -124,6 +182,7 @@ export const JobManagement: React.FC = () => {
       application_deadline: formData.application_deadline
         ? new Date(formData.application_deadline).toISOString()
         : undefined,
+      custom_interview_questions: validQuestions,
     };
 
     try {
@@ -576,6 +635,122 @@ export const JobManagement: React.FC = () => {
                   onChange={(e) => setFormData({ ...formData, qualifications: e.target.value })}
                   className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
+              </div>
+
+              {/* AI Interview Questions & Expected Answers Builder */}
+              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-b from-indigo-50/70 to-purple-50/40 border border-indigo-100 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-indigo-100">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+                      <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider">
+                        AI Interview Questions & Benchmark Model Answers
+                      </h4>
+                    </div>
+                    <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
+                      ইন্টারভিউ চলাকালীন AI এই প্রশ্নগুলো করবে। প্রার্থীর উত্তরকে আপনার দেওয়া <strong>আদর্শ উত্তরের (Expected Answer)</strong> সাথে মিলিয়ে AI স্বয়ংক্রিয়ভাবে <strong>% Match ও সঠিক/আংশিক/ভুল</strong> এনালাইসিস প্রকাশ করবে।
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {customQuestions.length === 0 && (
+                      <button
+                        type="button"
+                        onClick={handleLoadSampleQuestions}
+                        className="px-3 py-1.5 text-[11px] font-bold text-indigo-700 bg-white hover:bg-indigo-50 rounded-xl border border-indigo-200 transition-all cursor-pointer shadow-xs"
+                      >
+                        নমুনা প্রশ্ন লোড করুন
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleAddQuestion}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Question</span>
+                    </button>
+                  </div>
+                </div>
+
+                {customQuestions.length === 0 ? (
+                  <div className="p-4 rounded-xl bg-white/70 border border-indigo-100/70 text-center space-y-2">
+                    <p className="text-xs text-slate-500">
+                      কোনো কাস্টম প্রশ্ন যোগ করা হয়নি। আপনি চাইলে নির্দিষ্ট প্রশ্ন ও উত্তর যোগ করতে পারেন অথবা ডিফল্ট AI প্রশ্ন দিয়ে ইন্টারভিউ চালাতে পারেন।
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleLoadSampleQuestions}
+                      className="text-xs font-bold text-indigo-600 hover:text-indigo-800 underline cursor-pointer"
+                    >
+                      Click to load 3 standard technical benchmark questions
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-3.5">
+                    {customQuestions.map((q, idx) => (
+                      <div
+                        key={idx}
+                        className="p-4 rounded-xl bg-white border border-indigo-100/80 shadow-xs space-y-3"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 font-mono font-bold text-[11px]">
+                            Question #{idx + 1}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveQuestion(idx)}
+                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            title="Remove question"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            Interview Question (প্রশ্ন) <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="e.g. How does database indexing improve query performance?"
+                            value={q.question}
+                            onChange={(e) => handleUpdateQuestion(idx, 'question', e.target.value)}
+                            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            Expected Benchmark Answer (প্রত্যাশিত মডেল উত্তর) <span className="text-rose-500">*</span>
+                          </label>
+                          <textarea
+                            rows={2}
+                            required
+                            placeholder="e.g. B-Tree structure avoids full table scan, reduces disk I/O, gives O(log N) lookup time. Write operations (INSERT/UPDATE) have overhead due to index maintenance."
+                            value={q.expected_answer}
+                            onChange={(e) => handleUpdateQuestion(idx, 'expected_answer', e.target.value)}
+                            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            Key Concepts / Keywords (মূল ধারণা বা কীওয়ার্ড, কমা দিয়ে আলাদা করুন)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="e.g. B-Tree, table scan, disk I/O, O(log N), write overhead"
+                            value={Array.isArray(q.keywords) ? q.keywords.join(', ') : (q.keywords || '')}
+                            onChange={(e) => handleUpdateQuestion(idx, 'keywords', e.target.value)}
+                            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Publish Toggle */}

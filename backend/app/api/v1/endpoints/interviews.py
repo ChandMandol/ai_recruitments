@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
@@ -11,6 +12,7 @@ from app.models.interview import InterviewSchedule, InterviewStatus
 from app.models.job import Job
 from app.models.notification import NotificationType
 from app.models.user import User, UserRole
+from app.services.email_service import send_interview_invitation_email
 from app.services.notification_service import create_notification
 from app.schemas.interview import (
     EligibleCandidateItem,
@@ -145,6 +147,20 @@ async def schedule_interview(
         type=NotificationType.INTERVIEW_SCHEDULED.value,
         link_url=meeting_link,
     )
+
+    # 8. Dispatch real confirmation email via Gmail SMTP
+    if application.candidate and application.candidate.email:
+        asyncio.create_task(
+            send_interview_invitation_email(
+                to_email=application.candidate.email,
+                candidate_name=application.candidate.full_name or "Candidate",
+                job_title=job_name,
+                start_time=start_time,
+                end_time=end_time,
+                meeting_link=meeting_link,
+                instructions=payload.instructions,
+            )
+        )
 
     await db.commit()
     await db.refresh(new_interview)

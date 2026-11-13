@@ -304,25 +304,84 @@ export const AdminEvaluationModal: React.FC<AdminEvaluationModalProps> = ({
                     </h3>
                   </div>
 
-                  <div className="space-y-3 pt-1">
-                    {evaluation.question_analysis.map((q) => (
-                      <div key={q.question_number} className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="font-bold text-white leading-snug">
-                            Q{q.question_number}: {q.question}
-                          </span>
-                          <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-mono font-bold text-[11px] shrink-0">
-                            {q.score}%
-                          </span>
+                  <div className="space-y-4 pt-1">
+                    {evaluation.question_analysis.map((q) => {
+                      const isCorrect = q.status === 'CORRECT' || (q.score >= 75);
+                      const isPartial = q.status === 'PARTIALLY_CORRECT' || (q.score >= 40 && q.score < 75);
+
+                      return (
+                        <div key={q.question_number} className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <span className="font-bold text-white text-xs leading-snug">
+                              Q{q.question_number}: {q.question}
+                            </span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span
+                                className={`px-2 py-0.5 rounded-md font-mono font-bold text-[10px] border ${
+                                  isCorrect
+                                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                                    : isPartial
+                                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                    : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                                }`}
+                              >
+                                {isCorrect ? '✓ Correct' : isPartial ? '⚠ Partially Correct' : '✕ Incomplete'}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-mono font-bold text-[11px] border border-purple-500/30">
+                                {Math.round(q.similarity_score || q.score)}% Match
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Expected Benchmark Answer if configured */}
+                          {q.expected_answer && (
+                            <div className="p-2.5 rounded-lg bg-indigo-950/50 border border-indigo-800/60 text-[11px] space-y-1">
+                              <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider block">
+                                Benchmark Model Answer (প্রত্যাশিত আদর্শ উত্তর)
+                              </span>
+                              <p className="text-slate-200 leading-relaxed">{q.expected_answer}</p>
+                            </div>
+                          )}
+
+                          {/* Candidate Answer Summary */}
+                          <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-[11px] space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                              Candidate's Response (প্রার্থীর উত্তর)
+                            </span>
+                            <p className="text-slate-300 leading-relaxed">{q.candidate_answer_summary}</p>
+                          </div>
+
+                          {/* Matched & Missing Concepts Chips */}
+                          <div className="flex flex-wrap items-center gap-3 pt-0.5 text-[10px]">
+                            {q.matched_concepts && q.matched_concepts.length > 0 && (
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span className="text-emerald-400 font-bold">Matched:</span>
+                                {q.matched_concepts.map((c, i) => (
+                                  <span key={i} className="px-1.5 py-0.5 rounded bg-emerald-950/70 text-emerald-300 border border-emerald-800/50">
+                                    ✓ {c}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {q.missing_concepts && q.missing_concepts.length > 0 && (
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span className="text-rose-400 font-bold">Missed:</span>
+                                {q.missing_concepts.map((c, i) => (
+                                  <span key={i} className="px-1.5 py-0.5 rounded bg-rose-950/70 text-rose-300 border border-rose-800/50">
+                                    ✕ {c}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* AI Feedback */}
+                          <p className="text-emerald-400/90 text-[11px] bg-emerald-950/40 p-2.5 rounded-lg border border-emerald-900/40 leading-relaxed">
+                            <strong className="text-emerald-300">AI Similarity Analysis:</strong> {q.feedback}
+                          </p>
                         </div>
-                        <p className="text-slate-400 text-[11px] leading-relaxed">
-                          <strong className="text-slate-300">Candidate Summary:</strong> {q.candidate_answer_summary}
-                        </p>
-                        <p className="text-emerald-400/90 text-[11px] bg-emerald-950/40 p-2 rounded-lg border border-emerald-900/40">
-                          <strong>AI Feedback:</strong> {q.feedback}
-                        </p>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

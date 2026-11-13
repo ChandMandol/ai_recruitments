@@ -1,7 +1,7 @@
 import os
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -423,6 +423,13 @@ async def get_application_resume_file(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Application with ID '{application_id}' not found.",
         )
+
+    # Check if candidate resume is stored in Cloudinary
+    cand_profile = getattr(app.candidate, "candidate_profile", None) if app.candidate else None
+    if cand_profile and cand_profile.resume_url:
+        r_url = cand_profile.resume_url.strip()
+        if r_url.startswith("http://") or r_url.startswith("https://"):
+            return RedirectResponse(url=r_url, status_code=307)
 
     # Search for physical file
     target_file = None

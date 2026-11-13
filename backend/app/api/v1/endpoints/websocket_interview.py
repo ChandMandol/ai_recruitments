@@ -50,6 +50,7 @@ async def _get_interview_info(db: AsyncSession, room_token: str) -> Optional[dic
             InterviewSchedule.title,
             InterviewSchedule.duration_minutes,
             Job.title.label("job_title"),
+            Job.custom_interview_questions.label("custom_questions"),
             User.full_name.label("candidate_name"),
         )
         .join(Job, Job.id == InterviewSchedule.job_id)
@@ -67,6 +68,7 @@ async def _get_interview_info(db: AsyncSession, room_token: str) -> Optional[dic
         "duration_minutes": row["duration_minutes"],
         "job_title": row["job_title"] or "Software Engineer",
         "candidate_name": row["candidate_name"] or "Candidate",
+        "custom_questions": row.get("custom_questions") or [],
     }
 
 
@@ -143,6 +145,7 @@ async def interview_websocket(
         interview_id = interview_info["id"]
         job_title = interview_info["job_title"]
         candidate_name = interview_info["candidate_name"]
+        custom_questions = interview_info.get("custom_questions") or []
 
         # Mark interview IN_PROGRESS in DB
         await _mark_interview_in_progress(db, interview_id)
@@ -154,7 +157,7 @@ async def interview_websocket(
         # ── 4. Initial Turn-Based State Initialization ──────────────────────
         current_state = InterviewState.AI_SPEAKING
         current_turn = 1
-        total_turns = MAX_INTERVIEW_TURNS
+        total_turns = len(custom_questions) if (custom_questions and len(custom_questions) > 0) else MAX_INTERVIEW_TURNS
 
         # Send initial "connected" handshake
         await websocket.send_json({
@@ -202,6 +205,7 @@ async def interview_websocket(
                 api_key=api_key,
                 job_title=job_title,
                 candidate_name=candidate_name,
+                custom_questions=custom_questions,
             )
             connected = await gemini_session.connect()
             if not connected:
@@ -279,12 +283,17 @@ async def interview_websocket(
 
         # If Gemini is not available (e.g. testing / demo), automatically open Candidate turn
         if not gemini_available or not gemini_session:
+            first_q = (
+                custom_questions[0].get("question")
+                if (custom_questions and len(custom_questions) > 0)
+                else "Please introduce yourself and highlight your relevant experience."
+            )
             # Send initial simulated prompt and give turn to candidate
             await websocket.send_json({
                 "type": "ai_text",
                 "data": (
                     f"Welcome {candidate_name}! Thank you for joining the {job_title} technical interview. "
-                    "Please introduce yourself and highlight your relevant experience."
+                    f"Question 1 of {total_turns}: {first_q}"
                 ),
             })
             await websocket.send_json({"type": "ai_turn_complete"})
@@ -384,6 +393,11 @@ async def interview_websocket(
                             else:
                                 # Mock response for testing/demo without active Gemini Live key
                                 await asyncio.sleep(1.0)
+                                next_q = (
+                                    custom_questions[current_turn - 1].get("question")
+                                    if (custom_questions and len(custom_questions) >= current_turn)
+                                    else "How do you approach performance profiling, concurrency, and latency optimization in distributed systems?"
+                                )
                                 await broadcast_state(
                                     InterviewState.AI_SPEAKING,
                                     f"AI asking Question {current_turn}",
@@ -391,8 +405,7 @@ async def interview_websocket(
                                 await websocket.send_json({
                                     "type": "ai_text",
                                     "data": (
-                                        f"Great explanation! Now for Question {current_turn}: "
-                                        f"How do you approach performance profiling and latency optimization in distributed systems?"
+                                        f"Thank you for that response. Now for Question {current_turn} of {total_turns}: {next_q}"
                                     ),
                                 })
                                 await websocket.send_json({"type": "ai_turn_complete"})
@@ -418,13 +431,18 @@ async def interview_websocket(
                                         logger.error(f"Text relay error: {exc}")
                                 else:
                                     await asyncio.sleep(1.0)
+                                    next_q = (
+                                        custom_questions[current_turn - 1].get("question")
+                                        if (custom_questions and len(custom_questions) >= current_turn)
+                                        else "Could you elaborate further on your technical architecture and resilience strategies?"
+                                    )
                                     await broadcast_state(
                                         InterviewState.AI_SPEAKING,
                                         f"AI asking Question {current_turn}",
                                     )
                                     await websocket.send_json({
                                         "type": "ai_text",
-                                        "data": f"Thank you for sharing. Now for Question {current_turn}: Could you elaborate further on that architecture?",
+                                        "data": f"Thank you for sharing. Question {current_turn} of {total_turns}: {next_q}",
                                     })
                                     await websocket.send_json({"type": "ai_turn_complete"})
                                     await broadcast_state(

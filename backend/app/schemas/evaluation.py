@@ -6,9 +6,15 @@ from pydantic import BaseModel, ConfigDict, Field
 class QuestionAnalysisItem(BaseModel):
     question_number: int
     question: str
+    expected_answer: Optional[str] = None
     candidate_answer_summary: str
     feedback: str
     score: float
+    is_correct: Optional[bool] = None
+    similarity_score: Optional[float] = None
+    status: Optional[str] = "CORRECT"  # CORRECT | PARTIALLY_CORRECT | INCORRECT
+    matched_concepts: Optional[List[str]] = Field(default_factory=list)
+    missing_concepts: Optional[List[str]] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -68,6 +74,7 @@ class CandidateResultResponse(BaseModel):
     final_decision: Optional[str] = None
     overall_score: Optional[float] = None
     criteria_scores: Optional[Dict[str, float]] = None
+    question_analysis: Optional[List[Dict[str, Any]]] = None
     strengths: Optional[List[str]] = None
     weaknesses: Optional[List[str]] = None
     improvement_suggestions: Optional[List[str]] = None

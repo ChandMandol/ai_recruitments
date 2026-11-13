@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_candidate, get_db
@@ -13,6 +13,7 @@ from app.models.application import JobApplication
 from app.models.candidate import CandidateProfile
 from app.models.user import User
 from app.schemas.candidate import CandidateProfileResponse, CandidateProfileUpdate
+from app.services.storage_service import upload_resume_file
 
 router = APIRouter()
 
@@ -155,8 +156,8 @@ async def upload_resume(
 
     profile = await get_or_create_profile(current_candidate.id, db)
 
-    # 3. Clean up previous resume file if it exists
-    if profile.resume_url:
+    # 3. Clean up previous resume file if it exists locally
+    if profile.resume_url and not profile.resume_url.startswith("http"):
         old_file_path = os.path.join(UPLOAD_DIR, os.path.basename(profile.resume_url))
         if os.path.exists(old_file_path):
             try:
@@ -164,15 +165,17 @@ async def upload_resume(
             except OSError:
                 pass
 
-    # 4. Generate unique secure filename
-    safe_filename = f"{uuid.uuid4().hex}_{current_candidate.id[:8]}{ext}"
-    dest_path = os.path.join(UPLOAD_DIR, safe_filename)
-
-    with open(dest_path, "wb") as f:
-        f.write(contents)
+    # 4. Upload to Cloudinary (or local storage fallback)
+    storage_res = await upload_resume_file(
+        contents=contents,
+        original_filename=raw_name or f"resume{ext}",
+        content_type=file.content_type or ("application/pdf" if ext == ".pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        candidate_id=current_candidate.id,
+        db=db,
+    )
 
     # 5. Update database record
-    profile.resume_url = f"/api/v1/candidate/resume/file?t={int(datetime.now().timestamp())}"
+    profile.resume_url = storage_res["url"]
     profile.resume_filename = raw_name or f"resume{ext}"
     profile.resume_file_size = file_size
     profile.resume_mime_type = file.content_type or ("application/pdf" if ext == ".pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -189,7 +192,7 @@ async def preview_resume_file(
     current_candidate: User = Depends(get_current_candidate),
     db: AsyncSession = Depends(get_db),
 ):
-    """Preview or download candidate's uploaded resume."""
+    """Preview or download candidate's uploaded resume (redirects to Cloudinary if cloud-stored)."""
     profile = await get_or_create_profile(current_candidate.id, db)
 
     if not profile.resume_url or not profile.resume_filename:
@@ -197,6 +200,10 @@ async def preview_resume_file(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No resume uploaded yet.",
         )
+
+    # 1. If stored on Cloudinary / external cloud CDN, redirect immediately
+    if profile.resume_url.startswith("http://") or profile.resume_url.startswith("https://"):
+        return RedirectResponse(url=profile.resume_url, status_code=307)
 
     # Find the file in upload dir
     target_files = [f for f in os.listdir(UPLOAD_DIR) if current_candidate.id[:8] in f]

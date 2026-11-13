@@ -442,6 +442,52 @@ Output strictly valid JSON with format:
     return _get_fallback_questions(job_category, interview_level, cv_text, start_index, count, round_number)
 
 
+def is_admitted_ignorance_or_empty(text: str) -> bool:
+    """
+    Detects if candidate explicitly admits lack of knowledge (e.g. 'i did not know', 'i don't know', 'no idea'),
+    or provided an empty, skipped, timeout, or non-substantive filler response.
+    """
+    raw = text.strip()
+    if not raw or raw.startswith("[No answer provided") or raw.startswith("[Flagged:"):
+        return True
+
+    cleaned = re.sub(r"[^\w\s]", "", raw.lower()).strip()
+    if not cleaned or len(cleaned) < 2:
+        return True
+
+    # Patterns matching admission of ignorance or skipped question
+    ignorance_patterns = [
+        r"\bi\s*(?:do\s*not|dont|did\s*not|didnt|have\s*no|dont\s*really)\s*know\b",
+        r"\b(?:dont|dont\s*know|didnt\s*know|did\s*not\s*know|do\s*not\s*know)\b",
+        r"\bi\s*(?:have\s*no|got\s*no)\s*idea\b",
+        r"\bno\s*idea\b",
+        r"\bno\s*clue\b",
+        r"\bnot\s*sure\b",
+        r"\bi\s*am\s*not\s*sure\b",
+        r"\bno\s*answer\b",
+        r"\bno\s*answer\s*provided\b",
+        r"\bcant\s*answer\b",
+        r"\bcannot\s*answer\b",
+        r"\bnot\s*familiar\b",
+        r"\bi\s*have\s*no\s*knowledge\b",
+        r"\bunable\s*to\s*answer\b",
+        r"\bpass\b",
+        r"\bskip\b",
+        r"\bidk\b",
+        r"\bnone\b",
+        r"\bna\b",
+        r"\bnothing\b",
+        r"\bjanina\b",
+        r"\bjani\s*na\b",
+    ]
+
+    for pat in ignorance_patterns:
+        if re.search(pat, cleaned):
+            return True
+
+    return False
+
+
 def _evaluate_answer_offline(
     question: str,
     candidate_answer: str,
@@ -456,11 +502,12 @@ def _evaluate_answer_offline(
     words = ans.split()
     word_count = len(words)
 
-    if word_count < 3 or ans.lower() in ("i don't know", "no idea", "pass", "skip", "n/a", "idk", "none"):
+    # 1. Check for admitted ignorance or empty/timeout response -> STRICT 0%
+    if is_admitted_ignorance_or_empty(ans):
         return (
             False,
-            15.0,
-            "Answer was too brief or indicated unfamiliarity with the topic.",
+            0.0,
+            f"Candidate stated they did not know or could not answer the question regarding {topic}.",
             model_answer,
         )
 
@@ -471,7 +518,6 @@ def _evaluate_answer_offline(
     ans_words = set(re.findall(r"\w{4,}", ans.lower()))
 
     matched_keywords = target_words.intersection(ans_words)
-    keyword_ratio = len(matched_keywords) / max(len(target_words), 1)
 
     # Base score calculated from substance and keywords
     if word_count >= 15 and len(matched_keywords) >= 2:
@@ -483,7 +529,8 @@ def _evaluate_answer_offline(
         is_correct = True
         feedback = f"Acceptable foundational explanation of {topic}, though could be expanded with more depth."
     else:
-        score = 35.0
+        # Incorrect answer without relevant technical keywords
+        score = 10.0 if word_count >= 6 else 0.0
         is_correct = False
         feedback = f"Answer touches on the subject but misses core technical mechanics of {topic}."
 
@@ -503,6 +550,15 @@ async def evaluate_candidate_answer(
     Evaluates candidate's answer for correctness, scoring, and constructive feedback.
     Returns: (is_correct: bool, score: float, feedback: str, model_answer: str)
     """
+    # 1. IMMEDIATE CHECK: If candidate states they do not know, did not know, or no answer -> STRICT 0.0%
+    if is_admitted_ignorance_or_empty(candidate_answer):
+        return (
+            False,
+            0.0,
+            f"Candidate stated they did not know or could not answer the question regarding {topic}.",
+            model_answer,
+        )
+
     if not api_key:
         return _evaluate_answer_offline(question, candidate_answer, model_answer, topic)
 
@@ -516,7 +572,7 @@ Candidate's Given Answer: "{candidate_answer}"
 
 Evaluate the answer:
 1. "is_correct": boolean (True if the candidate demonstrates fundamentally accurate and relevant understanding of the core concept. False if the answer is completely wrong, irrelevant, empty, or demonstrates fundamental misconception).
-2. "score": float from 0.0 to 100.0 (Passing threshold is 60.0).
+2. "score": float from 0.0 to 100.0 (Passing threshold is 60.0). CRITICAL: If candidate indicates they do not know, did not know, or have no idea, "score" MUST be 0.0 and "is_correct" MUST be false.
 3. "feedback": string (1-2 sentences of specific, constructive feedback).
 4. "model_answer": string (concise reference answer).
 
@@ -567,7 +623,10 @@ def generate_summary_report(assessment: AdaptiveAssessment) -> Dict[str, Any]:
     accuracy = round((total_corr / total_q * 100.0), 1) if total_q > 0 else 0.0
 
     # Categorize performance tier
-    if assessment.status == AssessmentStatus.TERMINATED_EARLY.value:
+    if assessment.termination_reason and ("proctoring" in assessment.termination_reason.lower() or "tab switch" in assessment.termination_reason.lower()):
+        verdict = "Session Flagged & Terminated — Proctoring Violation (Exceeded Tab Switch Limit)"
+        tier = "Flagged / Disqualified (Integrity Violation)"
+    elif assessment.status == AssessmentStatus.TERMINATED_EARLY.value:
         verdict = f"Session Terminated in Round {assessment.current_round} (Passing threshold not met)"
         tier = "Developing (Needs Focused Review)"
     elif total_q >= 20:
@@ -592,7 +651,8 @@ def generate_summary_report(assessment: AdaptiveAssessment) -> Dict[str, Any]:
     for r in assessment.rounds_data:
         for q in r.get("questions", []):
             topic = q.get("topic", "General")
-            score = q.get("score") or (80.0 if q.get("is_correct") else 30.0)
+            raw_s = q.get("score")
+            score = float(raw_s) if raw_s is not None else (80.0 if q.get("is_correct") else 0.0)
             topic_scores.setdefault(topic, []).append(score)
 
             if q.get("is_correct"):
@@ -601,6 +661,9 @@ def generate_summary_report(assessment: AdaptiveAssessment) -> Dict[str, Any]:
             else:
                 if len(weaknesses) < 4:
                     weaknesses.append(f"Requires deeper mastery of {topic} principles and edge-case handling.")
+
+    if assessment.termination_reason and ("proctoring" in assessment.termination_reason.lower() or "tab switch" in assessment.termination_reason.lower()):
+        weaknesses.insert(0, "Candidate session was flagged: multiple unauthorized browser tab switches were detected during live interview.")
 
     if not strengths:
         strengths.append(f"Participated actively in the {assessment.job_category} assessment.")

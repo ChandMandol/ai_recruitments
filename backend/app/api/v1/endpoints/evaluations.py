@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -20,6 +21,7 @@ from app.schemas.evaluation import (
     InterviewEvaluationResponse,
 )
 from app.services.cv_analyzer import analyze_application_cv
+from app.services.email_service import send_interview_result_email
 from app.services.interview_evaluator import evaluate_interview_session
 from app.services.notification_service import create_notification
 
@@ -350,6 +352,19 @@ async def update_admin_final_decision(
             link_url="/candidate/interviews",
         )
 
+        # Dispatch real email notification via Gmail SMTP
+        if evaluation.candidate and evaluation.candidate.email:
+            asyncio.create_task(
+                send_interview_result_email(
+                    to_email=evaluation.candidate.email,
+                    candidate_name=evaluation.candidate.full_name or "Candidate",
+                    job_title=job_title,
+                    decision=decision_label,
+                    score=evaluation.overall_score,
+                    feedback=payload.admin_notes or evaluation.strengths_summary,
+                )
+            )
+
     await db.commit()
 
     # Re-fetch with relationships loaded
@@ -412,6 +427,7 @@ async def get_candidate_results(
                     final_decision=evaluation.final_decision,
                     overall_score=evaluation.overall_score,
                     criteria_scores=evaluation.individual_scores,
+                    question_analysis=evaluation.question_analysis,
                     strengths=evaluation.strengths,
                     weaknesses=evaluation.weaknesses,
                     improvement_suggestions=evaluation.improvement_suggestions,

@@ -1,5 +1,12 @@
 import api from './client';
 
+export interface CustomInterviewQuestion {
+  id?: string;
+  question: string;
+  expected_answer: string;
+  keywords?: string[];
+}
+
 export interface Job {
   id: string;
   title: string;
@@ -17,6 +24,7 @@ export interface Job {
   location?: string | null;
   status: 'PUBLISHED' | 'DRAFT' | 'ARCHIVED';
   is_published: boolean;
+  custom_interview_questions?: CustomInterviewQuestion[];
   created_by_id: string;
   company_id?: string | null;
   created_at: string;
@@ -47,6 +55,7 @@ export interface JobCreateData {
   location?: string;
   is_published?: boolean;
   status?: string;
+  custom_interview_questions?: CustomInterviewQuestion[];
 }
 
 export interface JobUpdateData extends Partial<JobCreateData> {}

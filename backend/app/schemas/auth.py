@@ -32,6 +32,7 @@ class AdminRegisterRequest(BaseModel):
     password: str = Field(..., min_length=6, max_length=128)
     phone: Optional[str] = None
     company_name: Optional[str] = None
+    admin_secret: Optional[str] = Field(None, description="Secret invitation key to authorize Admin registration")
 
 
 class LoginRequest(BaseModel):
@@ -73,4 +74,14 @@ class ChangePasswordRequest(BaseModel):
 class MessageResponse(BaseModel):
     message: str
     success: bool = True
+
+
+class UserStatusUpdateRequest(BaseModel):
+    is_active: bool
+
+
+class UserRoleUpdateRequest(BaseModel):
+    role: UserRole
+
+
 

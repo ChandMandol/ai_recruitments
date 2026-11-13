@@ -43,6 +43,37 @@ export type InterviewTurnState =
   | 'AI_PROCESSING'
   | 'INTERVIEW_COMPLETED';
 
+export interface AIAvatarOption {
+  id: 'female' | 'male';
+  name: string;
+  title: string;
+  gender: 'female' | 'male';
+  image: string;
+  badge: string;
+  description: string;
+}
+
+export const AI_AVATARS: AIAvatarOption[] = [
+  {
+    id: 'female',
+    name: 'Sarah Chen',
+    title: 'Lead AI Technical Interviewer',
+    gender: 'female',
+    image: '/avatars/avatar-female.png',
+    badge: 'Senior Evaluator',
+    description: 'Expert in full-stack architecture, frontend frameworks & system resilience.',
+  },
+  {
+    id: 'male',
+    name: 'Alex Mercer',
+    title: 'Senior Engineering Manager',
+    gender: 'male',
+    image: '/avatars/avatar-male.jpg',
+    badge: 'Tech Lead / Manager',
+    description: 'Expert in backend scalability, cloud infrastructure & engineering leadership.',
+  },
+];
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Audio playback helper — plays raw PCM or webm audio from Gemini
 // ─────────────────────────────────────────────────────────────────────────────
@@ -104,6 +135,18 @@ export const AIInterviewRoom: React.FC<AIInterviewRoomProps> = ({
   const [geminiConnected, setGeminiConnected] = useState(false);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [reconnectCount, setReconnectCount] = useState(0);
+
+  // ── AI Interviewer Avatar Selection ─────────────────────────────────────────
+  const [selectedAvatarId, setSelectedAvatarId] = useState<'female' | 'male'>('female');
+  const activeAvatar = AI_AVATARS.find((a) => a.id === selectedAvatarId) || AI_AVATARS[0];
+
+  // ── Tab-Switch & Anti-Cheating Proctoring State ──────────────────────────────
+  const [proctorWarning, setProctorWarning] = useState<{
+    count: number;
+    max: number;
+    isTerminated: boolean;
+  } | null>(null);
+  const tabViolationsRef = useRef<number>(0);
 
   // ── Captions / Transcripts ─────────────────────────────────────────────────
   const [showCaptions, setShowCaptions] = useState(true);
@@ -586,6 +629,46 @@ export const AIInterviewRoom: React.FC<AIInterviewRoomProps> = ({
     }, 2000);
   };
 
+  // ── Tab-Switch & Anti-Cheating Proctoring (3-Strike Rule) ───────────────────
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        if (interviewStateRef.current === 'INTERVIEW_COMPLETED') return;
+        tabViolationsRef.current += 1;
+        const currentViolations = tabViolationsRef.current;
+
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(
+            JSON.stringify({
+              type: 'proctor_warning',
+              tab_switches: currentViolations,
+            })
+          );
+        }
+
+        if (currentViolations <= 3) {
+          setProctorWarning({
+            count: currentViolations,
+            max: 3,
+            isTerminated: false,
+          });
+        } else {
+          setProctorWarning({
+            count: currentViolations,
+            max: 3,
+            isTerminated: true,
+          });
+          handleConfirmEndInterview();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
   // Helper logger for turns
   function logger_turn(action: string) {
     console.log(`[Turn System] ${action} (Turn: ${currentTurn}/${totalTurns})`);
@@ -610,7 +693,7 @@ export const AIInterviewRoom: React.FC<AIInterviewRoomProps> = ({
   // Captions text
   const displayCaption = captionBuffer || aiTranscript || (
     geminiConnected
-      ? 'Dr. Gemini is ready. Please listen to the question.'
+      ? `${activeAvatar.name} is ready. Please listen to the question.`
       : 'Connecting to AI Interview Room…'
   );
 
@@ -759,7 +842,7 @@ export const AIInterviewRoom: React.FC<AIInterviewRoomProps> = ({
             <>
               <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
               <span>
-                DR. GEMINI IS PROCESSING YOUR ANSWER — {turnNotification || 'Analyzing response...'}
+                {activeAvatar.name.toUpperCase()} IS PROCESSING YOUR ANSWER — {turnNotification || 'Analyzing response...'}
               </span>
             </>
           ) : (
@@ -818,13 +901,39 @@ export const AIInterviewRoom: React.FC<AIInterviewRoomProps> = ({
             }`}
           >
             {/* AI Top Info */}
-            <div className="flex items-center justify-between z-10">
+            <div className="flex flex-wrap items-center justify-between gap-2 z-10">
               <div className="flex items-center gap-2 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/60">
                 <Bot className="w-4 h-4 text-purple-400" />
-                <span className="font-extrabold text-xs text-white">Dr. Gemini AI</span>
+                <span className="font-extrabold text-xs text-white">{activeAvatar.name}</span>
                 <span className="text-[10px] text-purple-300 font-bold bg-purple-500/20 px-1.5 py-0.5 rounded">
-                  Lead Interviewer
+                  {activeAvatar.badge}
                 </span>
+              </div>
+
+              {/* Avatar Selector Switch */}
+              <div className="flex items-center bg-slate-900/90 p-1 rounded-xl border border-slate-700/60 gap-1">
+                <button
+                  type="button"
+                  onClick={() => setSelectedAvatarId('female')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                    selectedAvatarId === 'female'
+                      ? 'bg-purple-600 text-white shadow-xs'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Female (Sarah)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedAvatarId('male')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                    selectedAvatarId === 'male'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Male (Alex)
+                </button>
               </div>
 
               {/* Status Badge */}
@@ -856,55 +965,65 @@ export const AIInterviewRoom: React.FC<AIInterviewRoomProps> = ({
               </div>
             </div>
 
-            {/* AI Hologram Orb Animation */}
-            <div className="flex-1 flex flex-col items-center justify-center my-4 relative">
-              <div className="relative flex items-center justify-center">
+            {/* Real AI Interviewer Video Portrait Frame */}
+            <div className="flex-1 flex flex-col items-center justify-center my-4 relative z-10">
+              <div className="relative group max-w-sm w-full mx-auto">
+                {/* Speaking Aura Effect */}
                 {interviewState === 'AI_SPEAKING' && (
                   <>
-                    <div className="absolute w-56 h-56 rounded-full bg-purple-600/15 animate-ping duration-1000" />
-                    <div className="absolute w-44 h-44 rounded-full bg-indigo-500/25 animate-pulse" />
-                    <div className="absolute w-36 h-36 rounded-full bg-gradient-to-tr from-purple-500 to-indigo-600 blur-xl opacity-60 animate-pulse" />
+                    <div className="absolute -inset-2 rounded-3xl bg-gradient-to-r from-purple-600 via-indigo-600 to-pink-600 opacity-50 blur-xl animate-pulse" />
+                    <div className="absolute -inset-1 rounded-3xl bg-purple-500/30 animate-ping duration-1000" />
                   </>
                 )}
 
-                {interviewState === 'AI_PROCESSING' && (
-                  <div className="absolute w-44 h-44 rounded-full bg-amber-500/15 animate-ping duration-1000" />
-                )}
-
+                {/* Portrait Container */}
                 <div
-                  className={`relative w-28 h-28 sm:w-36 sm:h-36 rounded-full bg-gradient-to-tr from-slate-950 via-purple-900 to-indigo-700 p-1 flex items-center justify-center shadow-2xl transition-transform duration-300 ${
-                    interviewState === 'AI_SPEAKING' ? 'scale-105 shadow-purple-500/40' : 'scale-100 shadow-slate-900'
+                  className={`relative w-full aspect-[4/3] sm:aspect-[16/11] rounded-2xl overflow-hidden border-2 shadow-2xl transition-all duration-300 bg-slate-950 ${
+                    interviewState === 'AI_SPEAKING'
+                      ? 'border-purple-400 ring-4 ring-purple-500/30 shadow-purple-900/50'
+                      : 'border-slate-700/80 shadow-slate-950'
                   }`}
                 >
-                  <div className="w-full h-full rounded-full bg-slate-950/90 flex flex-col items-center justify-center relative overflow-hidden border border-purple-400/30">
-                    <div className="absolute inset-0 bg-gradient-to-t from-purple-600/20 via-transparent to-indigo-500/20 animate-pulse" />
-                    <Sparkles className="w-10 h-10 sm:w-14 sm:h-14 text-purple-300 drop-shadow-[0_0_12px_rgba(168,85,247,0.7)]" />
-                    <span className="text-[9px] font-black text-indigo-200 tracking-widest uppercase mt-1">
-                      Gemini Multimodal
-                    </span>
+                  <img
+                    src={activeAvatar.image}
+                    alt={activeAvatar.name}
+                    className={`w-full h-full object-cover object-top transition-transform duration-700 ${
+                      interviewState === 'AI_SPEAKING' ? 'scale-105' : 'scale-100'
+                    }`}
+                  />
+
+                  {/* Ambient Overlay for Video Call realism */}
+                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-transparent to-slate-950/20 pointer-events-none" />
+
+                  {/* Live Audio Waveform bar over the avatar bottom */}
+                  <div className="absolute bottom-3 left-4 right-4 flex items-center justify-between bg-slate-900/85 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/60 shadow-lg">
+                    <div className="flex items-center gap-1.5">
+                      <Volume2 className="w-3.5 h-3.5 text-purple-400" />
+                      <span className="text-[10px] font-bold text-slate-200">{activeAvatar.name}</span>
+                      <span className="text-[9px] text-slate-400 hidden sm:inline">({activeAvatar.badge})</span>
+                    </div>
+
+                    <div className="flex items-center gap-1 h-4">
+                      {interviewState === 'AI_SPEAKING' ? (
+                        <>
+                          <span className="w-1 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full animate-wave-1" />
+                          <span className="w-1 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full animate-wave-2" />
+                          <span className="w-1 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full animate-wave-3" />
+                          <span className="w-1 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full animate-wave-4" />
+                          <span className="w-1 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full animate-wave-5" />
+                          <span className="w-1 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full animate-wave-2" />
+                          <span className="w-1 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full animate-wave-1" />
+                        </>
+                      ) : (
+                        <div className="flex items-center gap-1 opacity-40">
+                          {[1, 2, 3, 4, 5].map((i) => (
+                            <span key={i} className="w-1 h-1.5 bg-slate-400 rounded-full" />
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-
-              {/* AI Voice Waveform */}
-              <div className="flex items-center gap-1.5 mt-8 h-8">
-                {interviewState === 'AI_SPEAKING' ? (
-                  <>
-                    <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-1" />
-                    <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-2" />
-                    <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-3" />
-                    <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-4" />
-                    <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-5" />
-                    <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-2" />
-                    <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-1" />
-                  </>
-                ) : (
-                  <div className="flex items-center gap-1 opacity-30">
-                    {[1, 2, 3, 4, 5, 6, 7].map((b) => (
-                      <span key={b} className="w-1.5 h-1.5 bg-slate-500 rounded-full" />
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
 
@@ -1228,6 +1347,76 @@ export const AIInterviewRoom: React.FC<AIInterviewRoomProps> = ({
             <p className="text-xs text-slate-400 leading-relaxed">
               Thank you, {candidateName}! All conversation turns have been recorded. The Gemini evaluation engine is synthesizing your scorecard. Redirecting...
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* ════════════════════════════════════════════════════════════════════
+          7. PROCTORING WARNING & ANTI-CHEATING ALERT MODAL (3-Strike Rule)
+         ════════════════════════════════════════════════════════════════════ */}
+      {proctorWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-fadeIn">
+          <div className="bg-slate-900 w-full max-w-md rounded-3xl p-6 sm:p-7 border-2 border-rose-500/80 shadow-2xl space-y-4 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto shadow-inner">
+              <ShieldAlert className="w-8 h-8 animate-bounce" />
+            </div>
+
+            <div>
+              <div className="inline-block px-3 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/30 mb-2">
+                {proctorWarning.isTerminated
+                  ? 'Proctoring Violation — Session Terminated'
+                  : `Tab Switch Violation (${proctorWarning.count}/3)`}
+              </div>
+              <h3 className="text-lg font-black text-white tracking-tight">
+                {proctorWarning.isTerminated
+                  ? 'Interview Flagged & Terminated'
+                  : `Warning: Tab switch detected! (${proctorWarning.count}/3)`}
+              </h3>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              {proctorWarning.isTerminated
+                ? 'You have exceeded the maximum allowed tab switch warnings (3/3). Your session has been flagged for suspected unauthorized resource lookup (ChatGPT/Google) and concluded.'
+                : 'Navigating away from the interview screen or switching browser tabs is strictly monitored. If you switch tabs more than 3 times, your interview will be immediately terminated and flagged.'}
+            </p>
+
+            {/* 3 Strikes Visualizer */}
+            <div className="flex items-center justify-center gap-2 py-1">
+              {[1, 2, 3].map((strike) => (
+                <div
+                  key={strike}
+                  className={`h-2.5 rounded-full transition-all w-12 ${
+                    proctorWarning.count >= strike
+                      ? 'bg-rose-500 shadow-sm shadow-rose-500/40'
+                      : 'bg-slate-800'
+                  }`}
+                />
+              ))}
+            </div>
+
+            <div>
+              {proctorWarning.isTerminated ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProctorWarning(null);
+                    if (onExit) onExit();
+                    else window.location.href = '/';
+                  }}
+                  className="w-full py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition-all cursor-pointer"
+                >
+                  Exit Interview Room
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setProctorWarning(null)}
+                  className="w-full py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition-all cursor-pointer shadow-md shadow-purple-600/30"
+                >
+                  I Understand, Return to Interview
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -72,58 +72,12 @@ async def register_candidate(
     )
 
 
-@router.post("/register/admin", response_model=TokenResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(auth_rate_limiter.check)])
-async def register_admin(
-    payload: AdminRegisterRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """Register a new Admin/Recruiter with optional company creation."""
-    stmt = select(User).where(User.email == payload.email.lower().strip())
-    existing = await db.execute(stmt)
-    if existing.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="An account with this email address already exists.",
-        )
-
-    company_id = None
-    if payload.company_name:
-        slug = payload.company_name.lower().strip().replace(" ", "-")
-        # Check company slug
-        c_stmt = select(Company).where(Company.slug == slug)
-        c_res = await db.execute(c_stmt)
-        company = c_res.scalar_one_or_none()
-        if not company:
-            company = Company(
-                name=payload.company_name.strip(),
-                slug=slug,
-                is_active=True,
-            )
-            db.add(company)
-            await db.flush()
-        company_id = company.id
-
-    user = User(
-        email=payload.email.lower().strip(),
-        password_hash=get_password_hash(payload.password),
-        full_name=payload.full_name.strip(),
-        phone=payload.phone.strip() if payload.phone else None,
-        role=UserRole.ADMIN.value,
-        company_id=company_id,
-        is_active=True,
-        is_verified=True,
-    )
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-
-    access_token = create_access_token(subject=user.id, role=user.role)
-    refresh_token = create_refresh_token(subject=user.id, role=user.role)
-
-    return TokenResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        user=UserResponse.model_validate(user),
+@router.post("/register/admin", response_model=TokenResponse, status_code=status.HTTP_403_FORBIDDEN)
+async def register_admin():
+    """Direct admin registration is disabled. Super Admin assigns roles directly from dashboard."""
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Public admin registration is disabled. Please register a candidate account, and have a Super Admin promote the account to Admin role.",
     )
 
 
@@ -148,7 +102,7 @@ async def login(
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="This account has been deactivated. Please contact support.",
+            detail="আপনার অ্যাকাউন্টটি ব্লক করা হয়েছে। অনুগ্রহ করে সাপোর্টে যোগাযোগ করুন (Your account has been blocked. Please contact support).",
         )
 
     # If frontend requests role verification (e.g. candidate logging into admin portal)

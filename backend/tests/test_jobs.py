@@ -63,6 +63,13 @@ async def test_job_lifecycle_crud():
             "department": "AI Engineering",
             "location": "Remote (Global)",
             "is_published": False,
+            "custom_interview_questions": [
+                {
+                    "question": "Explain B-Tree indexing in PostgreSQL.",
+                    "expected_answer": "B-Tree indexing reduces disk I/O to O(log N) and avoids full table scans.",
+                    "keywords": ["B-Tree", "disk I/O", "table scan"],
+                }
+            ],
         }
 
         create_res = await ac.post(
@@ -77,6 +84,8 @@ async def test_job_lifecycle_crud():
         assert job_data["status"] == "DRAFT"
         assert job_data["is_published"] is False
         assert len(job_data["required_skills"]) == 5
+        assert len(job_data.get("custom_interview_questions", [])) == 1
+        assert job_data["custom_interview_questions"][0]["question"] == "Explain B-Tree indexing in PostgreSQL."
 
         # 5. List admin jobs -> newly created draft job should be listed
         admin_list = await ac.get(f"{settings.API_V1_STR}/jobs/admin/all", headers=admin_headers)

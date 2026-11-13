@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowRight, Bot, KeyRound, Lock, Mail, ShieldAlert, Sparkles, UserCheck } from 'lucide-react';
+import { ArrowRight, Bot, Lock, Mail, ShieldAlert, UserCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Alert } from '../components/Alert';
 
@@ -36,20 +36,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const handleFillDemoAdmin = () => {
-    setRoleTab('ADMIN');
-    setEmail('admin@recruitmenthub.ai');
-    setPassword('Admin@123456');
-    setErrorMessage('');
-  };
-
-  const handleFillDemoCandidate = () => {
-    setRoleTab('CANDIDATE');
-    setEmail('candidate.demo@example.com');
-    setPassword('Candidate@123');
-    setErrorMessage('');
   };
 
   return (
@@ -180,32 +166,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               )}
             </button>
           </form>
-
-          {/* Quick Demo Credentials Autofill */}
-          <div className="mt-6 pt-5 border-t border-slate-200">
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2.5">
-              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-              <span>1-Click Demo Credentials</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={handleFillDemoAdmin}
-                className="py-2 px-3 rounded-lg border border-purple-200 bg-purple-50/50 hover:bg-purple-100/60 text-purple-700 text-xs font-semibold text-left transition-all cursor-pointer flex items-center gap-1.5"
-              >
-                <KeyRound className="w-3.5 h-3.5" />
-                Auto-fill Admin
-              </button>
-              <button
-                type="button"
-                onClick={handleFillDemoCandidate}
-                className="py-2 px-3 rounded-lg border border-indigo-200 bg-indigo-50/50 hover:bg-indigo-100/60 text-indigo-700 text-xs font-semibold text-left transition-all cursor-pointer flex items-center gap-1.5"
-              >
-                <UserCheck className="w-3.5 h-3.5" />
-                Demo Candidate
-              </button>
-            </div>
-          </div>
 
           {/* Register Prompt */}
           <div className="mt-6 text-center text-xs text-slate-500">

@@ -35,6 +35,9 @@ class Job(Base, UUIDMixin, TimestampMixin):
     status: Mapped[str] = mapped_column(String(30), default="DRAFT", index=True, nullable=False)  # DRAFT, PUBLISHED, ARCHIVED
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, index=True, nullable=False)
 
+    # Custom benchmark interview questions & expected answers configured by Admin
+    custom_interview_questions: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+
     # Relations
     created_by_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True

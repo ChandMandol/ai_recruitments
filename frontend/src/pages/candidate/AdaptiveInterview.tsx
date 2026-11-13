@@ -3,14 +3,15 @@ import {
   AlertCircle,
   Award,
   BookOpen,
-  Bot,
   BrainCircuit,
   Camera,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
   Compass,
+  Edit3,
   FileText,
   History,
   Loader2,
@@ -20,6 +21,7 @@ import {
   Radio,
   RotateCcw,
   Send,
+  ShieldAlert,
   Sparkles,
   StopCircle,
   ThumbsDown,
@@ -27,6 +29,7 @@ import {
   TrendingUp,
   Upload,
   User,
+  Users,
   VideoOff,
   Volume2,
   XCircle,
@@ -57,6 +60,37 @@ const INTERVIEW_LEVELS = [
   { id: 'Mid-Level', label: 'Mid-Level', sub: 'Real-world Architecture & APIs' },
   { id: 'Senior', label: 'Senior', sub: 'Scalability, Concurrency & Trade-offs' },
   { id: 'Lead', label: 'Lead', sub: 'System Design & Engineering Strategy' },
+];
+
+export interface AIAvatarOption {
+  id: 'female' | 'male';
+  name: string;
+  title: string;
+  gender: 'female' | 'male';
+  image: string;
+  badge: string;
+  description: string;
+}
+
+export const AI_AVATARS: AIAvatarOption[] = [
+  {
+    id: 'female',
+    name: 'Sarah Chen',
+    title: 'Lead AI Technical Interviewer',
+    gender: 'female',
+    image: '/avatars/avatar-female.png',
+    badge: 'Senior Evaluator',
+    description: 'Expert in full-stack architecture, frontend frameworks, algorithms & system resilience.',
+  },
+  {
+    id: 'male',
+    name: 'Alex Mercer',
+    title: 'Senior Engineering Manager',
+    gender: 'male',
+    image: '/avatars/avatar-male.jpg',
+    badge: 'Tech Lead / Manager',
+    description: 'Expert in backend scalability, cloud infrastructure, distributed databases & leadership.',
+  },
 ];
 
 export const AdaptiveInterview: React.FC = () => {
@@ -91,6 +125,56 @@ export const AdaptiveInterview: React.FC = () => {
   const hasStartedAnsweringRef = useRef<boolean>(false);
   const isSubmittingRef = useRef<boolean>(false);
   const silenceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Avatar Selection State (Female: Sarah Chen vs Male: Alex Mercer)
+  const [selectedAvatarId, setSelectedAvatarId] = useState<'female' | 'male'>('female');
+  const activeAvatar = AI_AVATARS.find((a) => a.id === selectedAvatarId) || AI_AVATARS[0];
+
+  // Speech Recognition & Auto-Submit States
+  const [isManuallyEditing, setIsManuallyEditing] = useState<boolean>(false);
+  const isManuallyEditingRef = useRef<boolean>(false);
+  const [autoSubmitCountdown, setAutoSubmitCountdown] = useState<number | null>(null);
+  const autoSubmitTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const speechSilenceDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const answerTextRef = useRef<string>('');
+
+  // Anti-Cheating & Tab-Switch Proctoring State
+  const [tabSwitchCount, setTabSwitchCount] = useState<number>(0);
+  const tabSwitchCountRef = useRef<number>(0);
+  const [proctorWarning, setProctorWarning] = useState<{
+    count: number;
+    max: number;
+    isTerminated: boolean;
+  } | null>(null);
+
+  // Browser Compatibility & Web Speech Detection
+  const isSpeechSupported =
+    typeof window !== 'undefined' &&
+    Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+  const isFirefox = typeof navigator !== 'undefined' && /firefox/i.test(navigator.userAgent);
+
+  useEffect(() => {
+    if (!isSpeechSupported) {
+      setIsManuallyEditing(true);
+      isManuallyEditingRef.current = true;
+    }
+  }, [isSpeechSupported]);
+
+  const viewStateRef = useRef<'setup' | 'live' | 'summary' | 'history'>('setup');
+  const currentAssessmentRef = useRef<AssessmentResponse | null>(null);
+  const showFeedbackModalRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    viewStateRef.current = viewState;
+  }, [viewState]);
+
+  useEffect(() => {
+    currentAssessmentRef.current = currentAssessment;
+  }, [currentAssessment]);
+
+  useEffect(() => {
+    showFeedbackModalRef.current = showFeedbackModal;
+  }, [showFeedbackModal]);
 
   // Camera & Device Stream
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -177,55 +261,116 @@ export const AdaptiveInterview: React.FC = () => {
     };
   }, [viewState, cameraEnabled]);
 
-  // AI Speech Synthesis (Speaks questions and feedback aloud)
-  const speakText = useCallback((text: string, onEnd?: () => void) => {
-    if (!('speechSynthesis' in window)) {
-      setAvatarMode('WAITING_FOR_ANSWER');
-      if (onEnd) onEnd();
-      return;
-    }
-    window.speechSynthesis.cancel();
-    setAvatarMode('AI_SPEAKING');
+  // AI Speech Synthesis (Speaks questions and feedback aloud adapted to chosen avatar)
+  const speakText = useCallback(
+    (text: string, onEnd?: () => void) => {
+      if (!('speechSynthesis' in window)) {
+        setAvatarMode('WAITING_FOR_ANSWER');
+        if (onEnd) onEnd();
+        return;
+      }
+      window.speechSynthesis.cancel();
+      setAvatarMode('AI_SPEAKING');
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.0;
 
-    const voices = window.speechSynthesis.getVoices();
-    const selectedVoice =
-      voices.find(
-        (v) =>
-          v.lang.startsWith('en') &&
-          (v.name.includes('Natural') ||
-            v.name.includes('Google') ||
-            v.name.includes('Samantha') ||
-            v.name.includes('Daniel') ||
-            v.name.includes('Guy'))
-      ) || voices.find((v) => v.lang.startsWith('en'));
+      const voices = window.speechSynthesis.getVoices();
+      let selectedVoice: SpeechSynthesisVoice | undefined;
 
-    if (selectedVoice) {
-      utterance.voice = selectedVoice;
-    }
+      if (selectedAvatarId === 'female') {
+        selectedVoice =
+          voices.find(
+            (v) =>
+              v.lang.startsWith('en') &&
+              (v.name.toLowerCase().includes('female') ||
+                v.name.includes('Samantha') ||
+                v.name.includes('Zira') ||
+                v.name.includes('Victoria') ||
+                v.name.includes('Google US English') ||
+                v.name.includes('Jenny') ||
+                v.name.includes('Karen'))
+          ) || voices.find((v) => v.lang.startsWith('en'));
+        utterance.pitch = 1.05;
+      } else {
+        selectedVoice =
+          voices.find(
+            (v) =>
+              v.lang.startsWith('en') &&
+              (v.name.toLowerCase().includes('male') ||
+                v.name.includes('David') ||
+                v.name.includes('Daniel') ||
+                v.name.includes('Guy') ||
+                v.name.includes('George') ||
+                v.name.includes('Microsoft David'))
+          ) || voices.find((v) => v.lang.startsWith('en'));
+        utterance.pitch = 0.95;
+      }
 
-    utterance.onend = () => {
-      setAvatarMode('WAITING_FOR_ANSWER');
-      if (onEnd) onEnd();
-    };
+      if (selectedVoice) {
+        utterance.voice = selectedVoice;
+      }
 
-    utterance.onerror = () => {
-      setAvatarMode('WAITING_FOR_ANSWER');
-      if (onEnd) onEnd();
-    };
+      utterance.onend = () => {
+        setAvatarMode('WAITING_FOR_ANSWER');
+        if (onEnd) onEnd();
+      };
 
-    window.speechSynthesis.speak(utterance);
-  }, []);
+      utterance.onerror = () => {
+        setAvatarMode('WAITING_FOR_ANSWER');
+        if (onEnd) onEnd();
+      };
+
+      window.speechSynthesis.speak(utterance);
+    },
+    [selectedAvatarId]
+  );
+
+  // Auto-Submit Countdown Trigger (When speech finished & candidate didn't manually edit)
+  const triggerAutoSubmitCountdown = useCallback(
+    (spokenText: string) => {
+      if (isManuallyEditingRef.current || isSubmittingRef.current) return;
+      if (!spokenText || spokenText.trim().length === 0) return;
+
+      if (autoSubmitTimerRef.current) clearInterval(autoSubmitTimerRef.current);
+
+      setAutoSubmitCountdown(3);
+      let remaining = 3;
+
+      autoSubmitTimerRef.current = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          if (autoSubmitTimerRef.current) {
+            clearInterval(autoSubmitTimerRef.current);
+            autoSubmitTimerRef.current = null;
+          }
+          setAutoSubmitCountdown(null);
+
+          // Verify candidate has NOT started manually typing
+          if (!isManuallyEditingRef.current && !isSubmittingRef.current) {
+            const finalAns = answerTextRef.current.trim() || spokenText.trim();
+            if (finalAns) {
+              submitAnswerDirect(finalAns);
+            }
+          }
+        } else {
+          setAutoSubmitCountdown(remaining);
+        }
+      }, 1000);
+    },
+    []
+  );
 
   // Continuous Speech Recognition for Candidate
   const startSpeechRecognition = useCallback(() => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-    if (!SpeechRecognition || !micEnabled) return;
+    if (!SpeechRecognition || !micEnabled) {
+      setIsManuallyEditing(true);
+      isManuallyEditingRef.current = true;
+      return;
+    }
 
     if (recognitionRef.current) {
       try {
@@ -245,10 +390,29 @@ export const AdaptiveInterview: React.FC = () => {
         for (let i = 0; i < event.results.length; i++) {
           transcript += event.results[i][0].transcript + ' ';
         }
-        if (transcript.trim()) {
+        const cleanTranscript = transcript.trim();
+        if (cleanTranscript) {
           hasStartedAnsweringRef.current = true;
           setAvatarMode('CANDIDATE_SPEAKING');
-          setAnswerText(transcript.trim());
+          setAnswerText(cleanTranscript);
+          answerTextRef.current = cleanTranscript;
+
+          // If the candidate is answering via voice and NOT typing manually
+          if (!isManuallyEditingRef.current) {
+            if (autoSubmitTimerRef.current) {
+              clearInterval(autoSubmitTimerRef.current);
+              autoSubmitTimerRef.current = null;
+              setAutoSubmitCountdown(null);
+            }
+            if (speechSilenceDebounceRef.current) {
+              clearTimeout(speechSilenceDebounceRef.current);
+            }
+
+            // Pause for 2.5 seconds of silence before initiating auto-submit countdown
+            speechSilenceDebounceRef.current = setTimeout(() => {
+              triggerAutoSubmitCountdown(cleanTranscript);
+            }, 2500);
+          }
         }
       };
 
@@ -269,7 +433,7 @@ export const AdaptiveInterview: React.FC = () => {
       console.warn('Speech recognition start failed:', e);
       setIsRecording(false);
     }
-  }, [micEnabled]);
+  }, [micEnabled, triggerAutoSubmitCountdown]);
 
   const stopSpeechRecognition = useCallback(() => {
     if (recognitionRef.current) {
@@ -290,8 +454,24 @@ export const AdaptiveInterview: React.FC = () => {
     }
   };
 
-  const onAnswerTextChange = (text: string) => {
+  // User manually editing or typing in textarea
+  const handleManualTextChange = (text: string) => {
+    setIsManuallyEditing(true);
+    isManuallyEditingRef.current = true;
+
+    // Immediately cancel any pending auto-submit!
+    if (autoSubmitTimerRef.current) {
+      clearInterval(autoSubmitTimerRef.current);
+      autoSubmitTimerRef.current = null;
+      setAutoSubmitCountdown(null);
+    }
+    if (speechSilenceDebounceRef.current) {
+      clearTimeout(speechSilenceDebounceRef.current);
+      speechSilenceDebounceRef.current = null;
+    }
+
     setAnswerText(text);
+    answerTextRef.current = text;
     if (text.trim().length > 0) {
       hasStartedAnsweringRef.current = true;
       if (avatarMode === 'WAITING_FOR_ANSWER') {
@@ -300,12 +480,46 @@ export const AdaptiveInterview: React.FC = () => {
     }
   };
 
+  const handleCancelAutoSubmit = () => {
+    setIsManuallyEditing(true);
+    isManuallyEditingRef.current = true;
+    if (autoSubmitTimerRef.current) {
+      clearInterval(autoSubmitTimerRef.current);
+      autoSubmitTimerRef.current = null;
+      setAutoSubmitCountdown(null);
+    }
+    if (speechSilenceDebounceRef.current) {
+      clearTimeout(speechSilenceDebounceRef.current);
+      speechSilenceDebounceRef.current = null;
+    }
+  };
+
+  const handleReenableAutoSubmit = () => {
+    setIsManuallyEditing(false);
+    isManuallyEditingRef.current = false;
+    if (answerText.trim().length > 0) {
+      triggerAutoSubmitCountdown(answerText.trim());
+    }
+  };
+
   // Auto-speak question when activeQuestion changes and begin 30s countdown
   useEffect(() => {
     if (viewState === 'live' && activeQuestion) {
       setAnswerText('');
+      answerTextRef.current = '';
       setSilenceSeconds(30);
       hasStartedAnsweringRef.current = false;
+      setIsManuallyEditing(false);
+      isManuallyEditingRef.current = false;
+      setAutoSubmitCountdown(null);
+      if (autoSubmitTimerRef.current) {
+        clearInterval(autoSubmitTimerRef.current);
+        autoSubmitTimerRef.current = null;
+      }
+      if (speechSilenceDebounceRef.current) {
+        clearTimeout(speechSilenceDebounceRef.current);
+        speechSilenceDebounceRef.current = null;
+      }
       setAvatarMode('AI_SPEAKING');
 
       const timer = setTimeout(() => {
@@ -357,10 +571,73 @@ export const AdaptiveInterview: React.FC = () => {
     };
   }, [viewState, avatarMode, activeQuestion, isSubmitting, showFeedbackModal, answerText]);
 
+  // Anti-Cheating & Tab-Switch Proctoring Effect
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (
+        document.hidden &&
+        viewStateRef.current === 'live' &&
+        currentAssessmentRef.current &&
+        !isSubmittingRef.current &&
+        !showFeedbackModalRef.current
+      ) {
+        tabSwitchCountRef.current += 1;
+        const currentViolations = tabSwitchCountRef.current;
+        setTabSwitchCount(currentViolations);
+
+        if (currentViolations <= 3) {
+          setProctorWarning({
+            count: currentViolations,
+            max: 3,
+            isTerminated: false,
+          });
+        } else {
+          // Exceeded 3 warnings (4th violation): Auto-terminate & flag!
+          setProctorWarning({
+            count: currentViolations,
+            max: 3,
+            isTerminated: true,
+          });
+          handleProctorViolationTermination(currentViolations);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  const handleProctorViolationTermination = async (violations: number) => {
+    if (!currentAssessmentRef.current) return;
+    stopSpeechRecognition();
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+
+    try {
+      const terminationReason = `Interview flagged & terminated: Exceeded maximum allowed tab switch warnings (${violations} violations detected). Suspected external resource lookup.`;
+      const res = await adaptiveInterviewApi.endAssessment(
+        currentAssessmentRef.current.id,
+        terminationReason
+      );
+      setCurrentAssessment(res);
+      if (res.summary_report) {
+        setSummaryReport(res.summary_report);
+      }
+    } catch (err) {
+      console.error('Failed to terminate on proctor violation:', err);
+    }
+  };
+
   // Start Assessment Handler
   const handleStartAssessment = async () => {
     setSessionLoading(true);
     setErrorMessage('');
+    setTabSwitchCount(0);
+    tabSwitchCountRef.current = 0;
+    setProctorWarning(null);
     try {
       const formData = new FormData();
       formData.append('job_category', selectedCategory);
@@ -388,6 +665,16 @@ export const AdaptiveInterview: React.FC = () => {
   // Core Submit Answer Handler
   const submitAnswerDirect = async (ans: string) => {
     if (!currentAssessment || !activeQuestion) return;
+
+    if (autoSubmitTimerRef.current) {
+      clearInterval(autoSubmitTimerRef.current);
+      autoSubmitTimerRef.current = null;
+    }
+    if (speechSilenceDebounceRef.current) {
+      clearTimeout(speechSilenceDebounceRef.current);
+      speechSilenceDebounceRef.current = null;
+    }
+    setAutoSubmitCountdown(null);
 
     stopSpeechRecognition();
     if ('speechSynthesis' in window) {
@@ -451,7 +738,19 @@ export const AdaptiveInterview: React.FC = () => {
   const handleProceedAfterEvaluation = () => {
     setShowFeedbackModal(false);
     setAnswerText('');
+    answerTextRef.current = '';
     setErrorMessage('');
+    setIsManuallyEditing(false);
+    isManuallyEditingRef.current = false;
+    setAutoSubmitCountdown(null);
+    if (autoSubmitTimerRef.current) {
+      clearInterval(autoSubmitTimerRef.current);
+      autoSubmitTimerRef.current = null;
+    }
+    if (speechSilenceDebounceRef.current) {
+      clearTimeout(speechSilenceDebounceRef.current);
+      speechSilenceDebounceRef.current = null;
+    }
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
@@ -596,6 +895,74 @@ export const AdaptiveInterview: React.FC = () => {
                 <p className="text-xs text-slate-300">
                   Runs up to a maximum of 20 questions, delivering an exhaustive AI skill feedback report.
                 </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Browser Compatibility Advisory Notice */}
+          {(!isSpeechSupported || isFirefox) && (
+            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 flex items-start gap-3.5 shadow-sm">
+              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="text-xs space-y-1">
+                <div className="font-bold text-amber-950 flex flex-wrap items-center gap-2">
+                  <span>Browser Compatibility Advisory: Best Experienced on Google Chrome or Microsoft Edge</span>
+                  {isFirefox && (
+                    <span className="px-2 py-0.5 rounded bg-amber-200 text-amber-900 font-mono text-[10px] font-bold">
+                      Firefox Detected
+                    </span>
+                  )}
+                  {!isSpeechSupported && (
+                    <span className="px-2 py-0.5 rounded bg-amber-200 text-amber-900 font-mono text-[10px] font-bold">
+                      Web Speech API Unavailable
+                    </span>
+                  )}
+                </div>
+                <p className="text-amber-800 leading-relaxed">
+                  Web Speech Voice-to-Text is natively supported by Chromium browsers (Google Chrome, Microsoft Edge, Brave). In Firefox or Safari, you can still listen to the AI interviewer and reply instantly via the built-in inline typing response mode, or switch to Chrome for hands-free speech recognition.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Hardware & System Readiness Check Grid */}
+          <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-sm">
+            <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <span>System & Hardware Readiness Check</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 flex items-center gap-2.5">
+                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0" />
+                <div>
+                  <div className="font-bold text-slate-800">Webcam Stream</div>
+                  <div className="text-[11px] text-slate-500">Split-Screen Face Active</div>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 flex items-center gap-2.5">
+                <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${micEnabled ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                <div>
+                  <div className="font-bold text-slate-800">Microphone</div>
+                  <div className="text-[11px] text-slate-500">{micEnabled ? 'Microphone Ready' : 'Muted'}</div>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 flex items-center gap-2.5">
+                <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isSpeechSupported ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                <div>
+                  <div className="font-bold text-slate-800">Voice Recognition</div>
+                  <div className="text-[11px] text-slate-500">
+                    {isSpeechSupported ? 'Native Web Speech' : 'Keyboard Typing Fallback'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 flex items-center gap-2.5">
+                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0" />
+                <div>
+                  <div className="font-bold text-slate-800">Tab Proctoring</div>
+                  <div className="text-[11px] text-slate-500">3-Strike Alert Shield</div>
+                </div>
               </div>
             </div>
           </div>
@@ -767,10 +1134,76 @@ export const AdaptiveInterview: React.FC = () => {
               </div>
             </div>
 
+            {/* 4. AI Interviewer Avatar Selection (Female vs Male) */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                  <Users className="w-4 h-4 text-indigo-600" />
+                  Step 4: Choose Your AI Interviewer Avatar
+                </label>
+                <span className="text-xs text-slate-500">Pick your preferred AI interviewer persona & voice</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {AI_AVATARS.map((avatar) => {
+                  const isSelected = selectedAvatarId === avatar.id;
+                  return (
+                    <div
+                      key={avatar.id}
+                      onClick={() => setSelectedAvatarId(avatar.id)}
+                      className={`relative p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center gap-4 ${
+                        isSelected
+                          ? 'border-indigo-600 bg-indigo-50/50 shadow-md ring-2 ring-indigo-500/20'
+                          : 'border-slate-200 hover:border-slate-300 bg-white'
+                      }`}
+                    >
+                      <div className="relative w-20 h-20 rounded-xl overflow-hidden shrink-0 border border-slate-200 shadow-sm bg-slate-900">
+                        <img src={avatar.image} alt={avatar.name} className="w-full h-full object-cover" />
+                        <span
+                          className={`absolute bottom-1 right-1 w-2.5 h-2.5 rounded-full border-2 border-white ${
+                            isSelected ? 'bg-emerald-500' : 'bg-slate-400'
+                          }`}
+                        />
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1">
+                          <h4 className="text-sm font-bold text-slate-900 truncate">{avatar.name}</h4>
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                              avatar.gender === 'female'
+                                ? 'bg-purple-100 text-purple-700'
+                                : 'bg-blue-100 text-blue-700'
+                            }`}
+                          >
+                            {avatar.gender}
+                          </span>
+                        </div>
+                        <p className="text-xs font-semibold text-indigo-600 mt-0.5">{avatar.title}</p>
+                        <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 leading-relaxed">
+                          {avatar.description}
+                        </p>
+                      </div>
+
+                      <div
+                        className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                          isSelected
+                            ? 'border-indigo-600 bg-indigo-600 text-white'
+                            : 'border-slate-300'
+                        }`}
+                      >
+                        {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Launch Action Button */}
             <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4">
               <div className="text-xs text-slate-500">
-                Ready to assess: <strong className="text-slate-800">{selectedCategory}</strong> ({selectedLevel} Level)
+                Ready to assess: <strong className="text-slate-800">{selectedCategory}</strong> ({selectedLevel}) with AI Interviewer <strong className="text-indigo-600">{activeAvatar.name}</strong>
               </div>
 
               <button
@@ -827,7 +1260,20 @@ export const AdaptiveInterview: React.FC = () => {
             </div>
 
             {/* Performance Snapshot & Actions */}
-            <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
+            <div className="flex items-center gap-2.5 w-full md:w-auto justify-between md:justify-end flex-wrap">
+              {/* Anti-Cheating Live Monitor Badge */}
+              <div
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition-all ${
+                  tabSwitchCount > 0
+                    ? 'bg-rose-50 text-rose-700 border-rose-300 animate-pulse'
+                    : 'bg-slate-100 text-slate-700 border-slate-200'
+                }`}
+                title="Anti-cheating proctoring active. Switching tabs is strictly monitored (Max 3 warnings)."
+              >
+                <ShieldAlert className={`w-3.5 h-3.5 ${tabSwitchCount > 0 ? 'text-rose-600' : 'text-slate-500'}`} />
+                <span>Proctoring: {tabSwitchCount}/3 Tab Switches</span>
+              </div>
+
               <div className="px-3.5 py-1.5 rounded-xl bg-slate-100 text-slate-800 text-xs font-bold flex items-center gap-2 border border-slate-200">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                 <span>Passed: {currentAssessment.total_correct} / {activeQuestion.index - 1}</span>
@@ -860,100 +1306,122 @@ export const AdaptiveInterview: React.FC = () => {
 
             {/* ═══════════════ LEFT: AI INTERVIEWER AVATAR ═══════════════ */}
             <div
-              className={`relative rounded-3xl overflow-hidden bg-gradient-to-b from-slate-900 via-indigo-950/70 to-slate-900 border transition-all duration-500 flex flex-col justify-between p-6 sm:p-7 shadow-2xl min-h-[540px] ${
+              className={`relative rounded-3xl overflow-hidden bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 border transition-all duration-500 flex flex-col justify-between p-5 sm:p-6 shadow-2xl min-h-[560px] ${
                 avatarMode === 'AI_SPEAKING'
-                  ? 'border-purple-500/80 ring-4 ring-purple-500/20 shadow-purple-900/30'
+                  ? 'border-purple-500/80 ring-4 ring-purple-500/20 shadow-purple-900/40'
                   : 'border-slate-800 shadow-slate-950'
               }`}
             >
               {/* AI Top Info Bar */}
               <div className="flex items-center justify-between z-10 gap-2 flex-wrap">
-                <div className="flex items-center gap-2 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/60">
-                  <Bot className="w-4 h-4 text-purple-400" />
-                  <span className="font-extrabold text-xs text-white">Dr. Gemini AI</span>
-                  <span className="text-[10px] text-purple-300 font-bold bg-purple-500/20 px-1.5 py-0.5 rounded">
-                    Lead Technical Interviewer
+                <div className="flex items-center gap-2.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/70">
+                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                  <span className="font-extrabold text-xs text-white">{activeAvatar.name}</span>
+                  <span className="text-[10px] text-purple-300 font-bold bg-purple-500/20 px-1.5 py-0.5 rounded border border-purple-400/30">
+                    {activeAvatar.title}
                   </span>
                 </div>
 
-                {/* AI Status Badge */}
-                <div
-                  className={`flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-bold transition-all ${
-                    avatarMode === 'AI_SPEAKING'
-                      ? 'bg-purple-500/20 text-purple-200 border border-purple-400/40 shadow-xs'
-                      : avatarMode === 'AI_EVALUATING'
-                      ? 'bg-amber-500/20 text-amber-200 border border-amber-400/40'
-                      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                  }`}
-                >
-                  {avatarMode === 'AI_EVALUATING' ? (
-                    <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" />
-                  ) : (
-                    <Radio
-                      className={`w-3.5 h-3.5 ${
-                        avatarMode === 'AI_SPEAKING' ? 'text-purple-400 animate-pulse' : 'text-emerald-400'
-                      }`}
-                    />
-                  )}
-                  <span>
-                    {avatarMode === 'AI_SPEAKING'
-                      ? 'AI is speaking question...'
-                      : avatarMode === 'AI_EVALUATING'
-                      ? 'AI is analyzing your answer...'
-                      : 'AI is listening to you'}
-                  </span>
+                {/* Quick Avatar Switcher & Status Badge */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAvatarId(selectedAvatarId === 'female' ? 'male' : 'female')}
+                    className="px-2.5 py-1 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-600 text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                    title="Switch AI Interviewer persona"
+                  >
+                    <Users className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Switch to {selectedAvatarId === 'female' ? 'Alex (Male)' : 'Sarah (Female)'}</span>
+                  </button>
+
+                  <div
+                    className={`flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-bold transition-all ${
+                      avatarMode === 'AI_SPEAKING'
+                        ? 'bg-purple-500/20 text-purple-200 border border-purple-400/40 shadow-xs'
+                        : avatarMode === 'AI_EVALUATING'
+                        ? 'bg-amber-500/20 text-amber-200 border border-amber-400/40'
+                        : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                    }`}
+                  >
+                    {avatarMode === 'AI_EVALUATING' ? (
+                      <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                    ) : (
+                      <Radio
+                        className={`w-3.5 h-3.5 ${
+                          avatarMode === 'AI_SPEAKING' ? 'text-purple-400 animate-pulse' : 'text-emerald-400'
+                        }`}
+                      />
+                    )}
+                    <span>
+                      {avatarMode === 'AI_SPEAKING'
+                        ? 'AI Speaking...'
+                        : avatarMode === 'AI_EVALUATING'
+                        ? 'AI Analyzing...'
+                        : 'AI Listening...'}
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              {/* AI Hologram Orb Animation */}
-              <div className="flex-1 flex flex-col items-center justify-center my-6 relative z-10">
-                <div className="relative flex items-center justify-center">
+              {/* Real AI Interviewer Video Portrait Frame */}
+              <div className="flex-1 flex flex-col items-center justify-center my-4 relative z-10">
+                <div className="relative group max-w-sm w-full mx-auto">
+                  {/* Speaking Aura Effect */}
                   {avatarMode === 'AI_SPEAKING' && (
                     <>
-                      <div className="absolute w-56 h-56 rounded-full bg-purple-600/15 animate-ping duration-1000" />
-                      <div className="absolute w-44 h-44 rounded-full bg-indigo-500/25 animate-pulse" />
-                      <div className="absolute w-36 h-36 rounded-full bg-gradient-to-tr from-purple-500 to-indigo-600 blur-xl opacity-60 animate-pulse" />
+                      <div className="absolute -inset-2 rounded-3xl bg-gradient-to-r from-purple-600 via-indigo-600 to-pink-600 opacity-50 blur-xl animate-pulse" />
+                      <div className="absolute -inset-1 rounded-3xl bg-purple-500/30 animate-ping duration-1000" />
                     </>
                   )}
 
-                  {avatarMode === 'AI_EVALUATING' && (
-                    <div className="absolute w-44 h-44 rounded-full bg-amber-500/15 animate-ping duration-1000" />
-                  )}
-
+                  {/* Portrait Container */}
                   <div
-                    className={`relative w-28 h-28 sm:w-36 sm:h-36 rounded-full bg-gradient-to-tr from-slate-950 via-purple-900 to-indigo-700 p-1 flex items-center justify-center shadow-2xl transition-transform duration-300 ${
-                      avatarMode === 'AI_SPEAKING' ? 'scale-105 shadow-purple-500/40' : 'scale-100 shadow-slate-900'
+                    className={`relative w-full aspect-[4/3] sm:aspect-[16/11] rounded-2xl overflow-hidden border-2 shadow-2xl transition-all duration-300 bg-slate-950 ${
+                      avatarMode === 'AI_SPEAKING'
+                        ? 'border-purple-400 ring-4 ring-purple-500/30 shadow-purple-900/50'
+                        : 'border-slate-700/80 shadow-slate-950'
                     }`}
                   >
-                    <div className="w-full h-full rounded-full bg-slate-950/90 flex flex-col items-center justify-center relative overflow-hidden border border-purple-400/30">
-                      <div className="absolute inset-0 bg-gradient-to-t from-purple-600/20 via-transparent to-indigo-500/20 animate-pulse" />
-                      <Sparkles className="w-10 h-10 sm:w-14 sm:h-14 text-purple-300 drop-shadow-[0_0_12px_rgba(168,85,247,0.7)]" />
-                      <span className="text-[9px] font-black text-indigo-200 tracking-widest uppercase mt-1">
-                        Gemini Live AI
-                      </span>
+                    <img
+                      src={activeAvatar.image}
+                      alt={activeAvatar.name}
+                      className={`w-full h-full object-cover object-top transition-transform duration-700 ${
+                        avatarMode === 'AI_SPEAKING' ? 'scale-105' : 'scale-100'
+                      }`}
+                    />
+
+                    {/* Ambient Overlay for Video Call realism */}
+                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-transparent to-slate-950/20 pointer-events-none" />
+
+                    {/* Live Audio Waveform bar over the avatar bottom */}
+                    <div className="absolute bottom-3 left-4 right-4 flex items-center justify-between bg-slate-900/85 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/60 shadow-lg">
+                      <div className="flex items-center gap-1.5">
+                        <Volume2 className="w-3.5 h-3.5 text-purple-400" />
+                        <span className="text-[10px] font-bold text-slate-200">{activeAvatar.name}</span>
+                        <span className="text-[9px] text-slate-400 hidden sm:inline">({activeAvatar.badge})</span>
+                      </div>
+
+                      <div className="flex items-center gap-1 h-4">
+                        {avatarMode === 'AI_SPEAKING' ? (
+                          <>
+                            <span className="w-1 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full animate-wave-1" />
+                            <span className="w-1 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full animate-wave-2" />
+                            <span className="w-1 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full animate-wave-3" />
+                            <span className="w-1 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full animate-wave-4" />
+                            <span className="w-1 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full animate-wave-5" />
+                            <span className="w-1 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full animate-wave-2" />
+                            <span className="w-1 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full animate-wave-1" />
+                          </>
+                        ) : (
+                          <div className="flex items-center gap-1 opacity-40">
+                            {[1, 2, 3, 4, 5].map((i) => (
+                              <span key={i} className="w-1 h-1.5 bg-slate-400 rounded-full" />
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-
-                {/* AI Voice Waveform */}
-                <div className="flex items-center gap-1.5 mt-6 h-8">
-                  {avatarMode === 'AI_SPEAKING' ? (
-                    <>
-                      <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-1" />
-                      <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-2" />
-                      <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-3" />
-                      <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-4" />
-                      <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-5" />
-                      <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-2" />
-                      <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-1" />
-                    </>
-                  ) : (
-                    <div className="flex items-center gap-1 opacity-30">
-                      {[1, 2, 3, 4, 5, 6, 7].map((b) => (
-                        <span key={b} className="w-1.5 h-1.5 bg-slate-500 rounded-full" />
-                      ))}
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -985,7 +1453,7 @@ export const AdaptiveInterview: React.FC = () => {
 
             {/* ═══════════════ RIGHT: CANDIDATE LIVE VIDEO CALL ═══════════════ */}
             <div
-              className={`relative rounded-3xl overflow-hidden bg-slate-900 border transition-all duration-500 flex flex-col justify-between p-6 sm:p-7 shadow-2xl min-h-[540px] ${
+              className={`relative rounded-3xl overflow-hidden bg-slate-900 border transition-all duration-500 flex flex-col justify-between p-5 sm:p-6 shadow-2xl min-h-[560px] ${
                 avatarMode === 'CANDIDATE_SPEAKING'
                   ? 'border-emerald-500/80 ring-4 ring-emerald-500/20 shadow-emerald-950/40'
                   : 'border-slate-800 shadow-slate-950'
@@ -1079,17 +1547,72 @@ export const AdaptiveInterview: React.FC = () => {
                 </button>
               </div>
 
-              {/* Bottom: Spoken Technical Response & Submit Action */}
-              <div className="relative z-10 space-y-3">
+              {/* Bottom: Spoken Technical Response, Auto-Submit & Submit Action */}
+              <div className="relative z-10 space-y-2.5">
+                {/* Auto-Submit Countdown Banner */}
+                {autoSubmitCountdown !== null && (
+                  <div className="p-3 rounded-2xl bg-gradient-to-r from-emerald-950/95 via-slate-900 to-emerald-950/90 border border-emerald-500/60 shadow-lg shadow-emerald-950/40 flex items-center justify-between gap-3 text-xs animate-pulse">
+                    <div className="flex items-center gap-2 text-emerald-300">
+                      <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span>
+                        Spoken response detected. Auto-submitting in{' '}
+                        <strong className="text-white text-sm font-black">{autoSubmitCountdown}s</strong>...
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={handleCancelAutoSubmit}
+                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-600 font-semibold cursor-pointer text-[11px] transition-colors"
+                      >
+                        Edit Manually
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSubmitAnswer}
+                        className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer text-[11px] transition-colors"
+                      >
+                        Submit Now
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Manual Edit Alert (When user typed/edited text) */}
+                {isManuallyEditing && (
+                  <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-700/80 flex items-center justify-between text-xs text-slate-300">
+                    <span className="flex items-center gap-1.5 text-slate-300">
+                      <Edit3 className="w-3.5 h-3.5 text-indigo-400" />
+                      Manual edit active (Voice auto-submit paused)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleReenableAutoSubmit}
+                      className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold underline cursor-pointer"
+                    >
+                      Re-enable Auto-Submit
+                    </button>
+                  </div>
+                )}
+
                 <div className="bg-slate-900/90 backdrop-blur-md p-3.5 rounded-2xl border border-slate-700/70 space-y-2">
                   <div className="flex items-center justify-between text-[11px] font-semibold text-slate-300">
-                    <span className="flex items-center gap-1.5 text-emerald-400">
-                      <Sparkles className="w-3.5 h-3.5" />
-                      Live Speech Recognition & Answer
-                    </span>
+                    {!isSpeechSupported ? (
+                      <span className="flex items-center gap-1.5 text-amber-400">
+                        <Edit3 className="w-3.5 h-3.5" />
+                        Manual Typing Response Mode (Best experienced on Chrome/Edge)
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1.5 text-emerald-400">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        Live Speech Recognition & Answer
+                      </span>
+                    )}
                     <span className="text-slate-400 text-[10px]">
                       {answerText.trim()
-                        ? `${answerText.trim().split(/\s+/).filter(Boolean).length} words spoken`
+                        ? `${answerText.trim().split(/\s+/).filter(Boolean).length} words entered`
+                        : !isSpeechSupported
+                        ? 'Type your answer below'
                         : 'Speak naturally into microphone'}
                     </span>
                   </div>
@@ -1097,8 +1620,13 @@ export const AdaptiveInterview: React.FC = () => {
                   <textarea
                     rows={3}
                     value={answerText}
-                    onChange={(e) => onAnswerTextChange(e.target.value)}
-                    placeholder="Speak your answer into the microphone, or type/edit here..."
+                    onChange={(e) => handleManualTextChange(e.target.value)}
+                    onFocus={handleCancelAutoSubmit}
+                    placeholder={
+                      !isSpeechSupported
+                        ? 'Type your answer here clearly and click Submit Response (or press Enter)...'
+                        : 'Speak naturally into microphone, or type/edit here...'
+                    }
                     className="w-full p-2.5 rounded-xl bg-slate-950/80 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none leading-relaxed"
                   />
                 </div>
@@ -1107,7 +1635,9 @@ export const AdaptiveInterview: React.FC = () => {
                   <span className="text-[11px] text-slate-400">
                     {silenceSeconds > 0 && !hasStartedAnsweringRef.current
                       ? `Auto-moves to next question if silent for ${silenceSeconds}s`
-                      : 'Ready? Submit your technical answer.'}
+                      : isManuallyEditing
+                      ? 'Manual edits ready. Click Submit Response.'
+                      : 'Auto-submits when you finish speaking.'}
                   </span>
 
                   <button
@@ -1221,6 +1751,71 @@ export const AdaptiveInterview: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* ── Proctoring Warning & Anti-Cheating Alert Modal ─────────────────── */}
+          {proctorWarning && (
+            <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-[60] flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-7 shadow-2xl border-2 border-rose-500/80 space-y-4 animate-in fade-in zoom-in-95 text-center">
+                <div className="w-16 h-16 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto shadow-inner">
+                  <ShieldAlert className="w-8 h-8 animate-bounce" />
+                </div>
+
+                <div>
+                  <div className="inline-block px-3 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider bg-rose-100 text-rose-700 border border-rose-200 mb-2">
+                    {proctorWarning.isTerminated
+                      ? 'Proctoring Violation — Session Terminated'
+                      : `Tab Switch Violation (${proctorWarning.count}/3)`}
+                  </div>
+                  <h3 className="text-lg font-black text-slate-900 tracking-tight">
+                    {proctorWarning.isTerminated
+                      ? 'Interview Terminated & Flagged'
+                      : `Warning: Tab switch detected during interview! (${proctorWarning.count}/3)`}
+                  </h3>
+                </div>
+
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  {proctorWarning.isTerminated
+                    ? 'You have exceeded the maximum allowed tab switch warnings (3/3). Your interview session has been permanently flagged for suspected unauthorized resource lookup (ChatGPT/Google) and terminated.'
+                    : 'Navigating away from the interview screen, switching browser tabs, or opening ChatGPT / Google search is strictly prohibited and actively monitored. If you switch tabs more than 3 times, your interview will be immediately terminated and flagged.'}
+                </p>
+
+                {/* 3 Strikes Visualizer */}
+                <div className="flex items-center justify-center gap-2 py-1">
+                  {[1, 2, 3].map((strike) => (
+                    <div
+                      key={strike}
+                      className={`h-2.5 rounded-full transition-all w-12 ${
+                        proctorWarning.count >= strike
+                          ? 'bg-rose-500 shadow-sm shadow-rose-500/40'
+                          : 'bg-slate-200'
+                      }`}
+                    />
+                  ))}
+                </div>
+
+                {proctorWarning.isTerminated ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProctorWarning(null);
+                      setViewState('summary');
+                    }}
+                    className="w-full py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md shadow-rose-600/30 transition-all cursor-pointer"
+                  >
+                    View Flagged Assessment Summary
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setProctorWarning(null)}
+                    className="w-full py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow-md shadow-slate-900/30 transition-all cursor-pointer"
+                  >
+                    I Understand & Return to Interview ({Math.max(0, 3 - proctorWarning.count)} warnings left)
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1257,6 +1852,16 @@ export const AdaptiveInterview: React.FC = () => {
             <p className="text-slate-300 text-sm mt-2 max-w-3xl leading-relaxed">
               {summaryReport.summary_narrative}
             </p>
+
+            {/* Termination Reason Alert (e.g. Proctoring Violation) */}
+            {currentAssessment.termination_reason && (
+              <div className="mt-4 p-3.5 rounded-xl bg-rose-500/20 border border-rose-400/40 text-xs text-rose-200 flex items-center gap-2.5">
+                <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+                <span>
+                  <strong>Assessment Termination Status:</strong> {currentAssessment.termination_reason}
+                </span>
+              </div>
+            )}
 
             {/* Key Metrics Grid */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-white/10">

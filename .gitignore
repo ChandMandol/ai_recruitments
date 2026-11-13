@@ -45,4 +45,7 @@ backend/uploads/resumes/*
 *.swo
 .DS_Store
 Thumbs.db
+*.db
+*.sqlite
+*.sqlite3
 

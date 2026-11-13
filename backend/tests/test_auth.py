@@ -161,3 +161,59 @@ async def test_forgot_and_reset_password_flow():
             "password": "NewSecretPassword@456",
         })
         assert res_new_login.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_admin_registration_security_and_role_change():
+    """Verify that public admin registration is disabled and Super Admin can promote user to Admin."""
+    unique_suffix = uuid.uuid4().hex[:6]
+    candidate_email = f"promoted.user.{unique_suffix}@example.com"
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Attempt direct public admin registration -> 403 Forbidden
+        res_direct_admin = await client.post(
+            "/api/v1/auth/register/admin",
+            json={
+                "full_name": "Wannabe Admin",
+                "email": candidate_email,
+                "password": "Password@123",
+            },
+        )
+        assert res_direct_admin.status_code == 403
+        assert "Public admin registration is disabled" in res_direct_admin.text
+
+        # 2. User registers as candidate
+        cand_res = await client.post(
+            "/api/v1/auth/register/candidate",
+            json={
+                "full_name": "Future Admin Candidate",
+                "email": candidate_email,
+                "password": "Password@123",
+            },
+        )
+        assert cand_res.status_code == 201
+        candidate_id = cand_res.json()["user"]["id"]
+        assert cand_res.json()["user"]["role"] == "CANDIDATE"
+
+        # 3. Super Admin logs in
+        admin_login = await client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": settings.FIRST_SUPERADMIN_EMAIL,
+                "password": settings.FIRST_SUPERADMIN_PASSWORD,
+            },
+        )
+        assert admin_login.status_code == 200
+        super_token = admin_login.json()["access_token"]
+        headers = {"Authorization": f"Bearer {super_token}"}
+
+        # 4. Super Admin promotes candidate to ADMIN role
+        role_res = await client.patch(
+            f"/api/v1/admin/users/{candidate_id}/role",
+            headers=headers,
+            json={"role": "ADMIN"},
+        )
+        assert role_res.status_code == 200
+        assert role_res.json()["role"] == "ADMIN"
+        assert role_res.json()["id"] == candidate_id

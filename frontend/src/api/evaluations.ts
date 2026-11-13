@@ -48,9 +48,15 @@ export interface CVAnalysisReport {
 export interface QuestionAnalysisItem {
   question_number: number;
   question: string;
+  expected_answer?: string;
   candidate_answer_summary: string;
   feedback: string;
   score: number;
+  is_correct?: boolean;
+  similarity_score?: number;
+  status?: 'CORRECT' | 'PARTIALLY_CORRECT' | 'INCORRECT' | string;
+  matched_concepts?: string[];
+  missing_concepts?: string[];
 }
 
 export interface InterviewEvaluation {
@@ -100,6 +106,7 @@ export interface CandidateResult {
   final_decision?: 'SELECTED' | 'REJECTED' | 'WAITLISTED';
   overall_score?: number;
   criteria_scores?: Record<string, number>;
+  question_analysis?: QuestionAnalysisItem[];
   strengths?: string[];
   weaknesses?: string[];
   improvement_suggestions?: string[];
@@ -115,6 +122,44 @@ export interface GeminiConfig {
   masked_key?: string | null;
   model: string;
   status: string;
+}
+
+export interface SmtpConfig {
+  host: string;
+  port: number;
+  user: string;
+  has_password: boolean;
+  masked_password?: string | null;
+  from_name: string;
+  is_enabled: boolean;
+  source: string;
+  status: string;
+}
+
+export interface SmtpConfigUpdate {
+  host: string;
+  port: number;
+  user: string;
+  password?: string;
+  from_name?: string;
+  is_enabled: boolean;
+}
+
+export interface CloudinaryConfig {
+  cloud_name: string;
+  api_key: string;
+  has_secret: boolean;
+  masked_secret?: string | null;
+  is_enabled: boolean;
+  source: string;
+  status: string;
+}
+
+export interface CloudinaryConfigUpdate {
+  cloud_name: string;
+  api_key: string;
+  api_secret?: string;
+  is_enabled: boolean;
 }
 
 export const evaluationsApi = {
@@ -196,6 +241,44 @@ export const evaluationsApi = {
 
   clearGeminiConfig: async () => {
     const response = await api.delete<{ message: string }>('/admin/settings/gemini');
+    return response.data;
+  },
+
+  // ── Gmail SMTP Dispatcher API ──────────────────────────────────────────────
+  getSmtpConfig: async () => {
+    const response = await api.get<SmtpConfig>('/admin/settings/smtp');
+    return response.data;
+  },
+
+  updateSmtpConfig: async (payload: SmtpConfigUpdate) => {
+    const response = await api.post<SmtpConfig>('/admin/settings/smtp', payload);
+    return response.data;
+  },
+
+  testSmtpConnection: async (recipient_email: string) => {
+    const response = await api.post<{
+      success: boolean;
+      message: string;
+    }>('/admin/settings/smtp/test', { recipient_email });
+    return response.data;
+  },
+
+  // ── Cloudinary Cloud Storage API ───────────────────────────────────────────
+  getCloudinaryConfig: async () => {
+    const response = await api.get<CloudinaryConfig>('/admin/settings/cloudinary');
+    return response.data;
+  },
+
+  updateCloudinaryConfig: async (payload: CloudinaryConfigUpdate) => {
+    const response = await api.post<CloudinaryConfig>('/admin/settings/cloudinary', payload);
+    return response.data;
+  },
+
+  testCloudinaryConnection: async () => {
+    const response = await api.post<{
+      success: boolean;
+      message: string;
+    }>('/admin/settings/cloudinary/test');
     return response.data;
   },
 };

@@ -15,6 +15,14 @@ interface AuthContextType {
     password: string;
     phone?: string;
   }) => Promise<User>;
+  registerAdmin: (data: {
+    full_name: string;
+    email: string;
+    password: string;
+    company_name?: string;
+    admin_secret: string;
+    phone?: string;
+  }) => Promise<User>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -78,6 +86,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return data.user;
   };
 
+  const registerAdmin = async (regData: {
+    full_name: string;
+    email: string;
+    password: string;
+    company_name?: string;
+    admin_secret: string;
+    phone?: string;
+  }): Promise<User> => {
+    const data = await authApi.registerAdmin(regData);
+    saveAuthData(data);
+    return data.user;
+  };
+
   const logout = async () => {
     try {
       await authApi.logout();
@@ -105,6 +126,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isLoading,
         login,
         registerCandidate,
+        registerAdmin,
         logout,
         refreshUser,
       }}

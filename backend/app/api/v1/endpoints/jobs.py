@@ -35,6 +35,7 @@ async def create_job(
         location=payload.location or "Remote",
         status=job_status,
         is_published=payload.is_published,
+        custom_interview_questions=[q.model_dump() for q in payload.custom_interview_questions] if payload.custom_interview_questions else [],
         created_by_id=current_admin.id,
         company_id=current_admin.company_id,
     )
