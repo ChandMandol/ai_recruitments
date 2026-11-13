@@ -1,29 +1,37 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   AlertCircle,
-  ArrowRight,
   Award,
   BookOpen,
+  Bot,
   BrainCircuit,
+  Camera,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Clock,
   Compass,
   FileText,
   History,
+  Loader2,
   Mic,
   MicOff,
   Play,
+  Radio,
   RotateCcw,
+  Send,
   Sparkles,
   StopCircle,
   ThumbsDown,
   ThumbsUp,
   TrendingUp,
   Upload,
+  User,
+  VideoOff,
   Volume2,
   XCircle,
 } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 import { adaptiveInterviewApi } from '../../api/adaptiveInterview';
 import { candidateApi } from '../../api/candidate';
 import type {
@@ -52,6 +60,8 @@ const INTERVIEW_LEVELS = [
 ];
 
 export const AdaptiveInterview: React.FC = () => {
+  const { user } = useAuth();
+
   // Navigation & Views: 'setup' | 'live' | 'summary' | 'history'
   const [viewState, setViewState] = useState<'setup' | 'live' | 'summary' | 'history'>('setup');
 
@@ -71,9 +81,23 @@ export const AdaptiveInterview: React.FC = () => {
   const [lastEvaluation, setLastEvaluation] = useState<AnswerEvaluationResponse | null>(null);
   const [showFeedbackModal, setShowFeedbackModal] = useState<boolean>(false);
   const [isRecording, setIsRecording] = useState<boolean>(false);
-  const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [sessionLoading, setSessionLoading] = useState<boolean>(false);
+
+  // Split-Screen Real-Time Video Call & Avatar States
+  type AvatarMode = 'AI_SPEAKING' | 'WAITING_FOR_ANSWER' | 'CANDIDATE_SPEAKING' | 'AI_EVALUATING';
+  const [avatarMode, setAvatarMode] = useState<AvatarMode>('AI_SPEAKING');
+  const [silenceSeconds, setSilenceSeconds] = useState<number>(30);
+  const hasStartedAnsweringRef = useRef<boolean>(false);
+  const isSubmittingRef = useRef<boolean>(false);
+  const silenceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Camera & Device Stream
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [cameraEnabled, setCameraEnabled] = useState<boolean>(true);
+  const [micEnabled, setMicEnabled] = useState<boolean>(true);
+  const [cameraStreamAvailable, setCameraStreamAvailable] = useState<boolean>(false);
 
   // History State
   const [historyList, setHistoryList] = useState<AssessmentResponse[]>([]);
@@ -102,39 +126,111 @@ export const AdaptiveInterview: React.FC = () => {
     checkProfile();
   }, []);
 
-  // Web Speech API Voice synthesis helper
-  const handleReadAloud = (text: string) => {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    if (isSpeaking) {
-      setIsSpeaking(false);
+  // Camera Setup Effect for Split-Screen Video Call
+  useEffect(() => {
+    let active = true;
+
+    if (viewState !== 'live') {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      setCameraStreamAvailable(false);
       return;
     }
+
+    async function initCamera() {
+      if (!cameraEnabled) {
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((t) => t.stop());
+          streamRef.current = null;
+        }
+        setCameraStreamAvailable(false);
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+          audio: false,
+        });
+        if (active) {
+          streamRef.current = stream;
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+          }
+          setCameraStreamAvailable(true);
+        }
+      } catch (err) {
+        console.warn('Camera access denied or device not found:', err);
+        if (active) setCameraStreamAvailable(false);
+      }
+    }
+
+    initCamera();
+
+    return () => {
+      active = false;
+      if (viewState !== 'live' && streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, [viewState, cameraEnabled]);
+
+  // AI Speech Synthesis (Speaks questions and feedback aloud)
+  const speakText = useCallback((text: string, onEnd?: () => void) => {
+    if (!('speechSynthesis' in window)) {
+      setAvatarMode('WAITING_FOR_ANSWER');
+      if (onEnd) onEnd();
+      return;
+    }
+    window.speechSynthesis.cancel();
+    setAvatarMode('AI_SPEAKING');
+
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = () => setIsSpeaking(false);
-    setIsSpeaking(true);
-    window.speechSynthesis.speak(utterance);
-  };
 
-  // Web Speech API Microphone Dictation helper
-  const toggleSpeechRecognition = () => {
+    const voices = window.speechSynthesis.getVoices();
+    const selectedVoice =
+      voices.find(
+        (v) =>
+          v.lang.startsWith('en') &&
+          (v.name.includes('Natural') ||
+            v.name.includes('Google') ||
+            v.name.includes('Samantha') ||
+            v.name.includes('Daniel') ||
+            v.name.includes('Guy'))
+      ) || voices.find((v) => v.lang.startsWith('en'));
+
+    if (selectedVoice) {
+      utterance.voice = selectedVoice;
+    }
+
+    utterance.onend = () => {
+      setAvatarMode('WAITING_FOR_ANSWER');
+      if (onEnd) onEnd();
+    };
+
+    utterance.onerror = () => {
+      setAvatarMode('WAITING_FOR_ANSWER');
+      if (onEnd) onEnd();
+    };
+
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  // Continuous Speech Recognition for Candidate
+  const startSpeechRecognition = useCallback(() => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-    if (!SpeechRecognition) {
-      alert('Speech-to-text is not supported by your browser. Please type your answer.');
-      return;
-    }
+    if (!SpeechRecognition || !micEnabled) return;
 
-    if (isRecording) {
-      if (recognitionRef.current) {
+    if (recognitionRef.current) {
+      try {
         recognitionRef.current.stop();
-      }
-      setIsRecording(false);
-      return;
+      } catch {}
     }
 
     try {
@@ -146,21 +242,120 @@ export const AdaptiveInterview: React.FC = () => {
       recognition.onstart = () => setIsRecording(true);
       recognition.onresult = (event: any) => {
         let transcript = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          transcript += event.results[i][0].transcript;
+        for (let i = 0; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript + ' ';
         }
-        setAnswerText((prev) => (prev ? `${prev} ${transcript}` : transcript));
+        if (transcript.trim()) {
+          hasStartedAnsweringRef.current = true;
+          setAvatarMode('CANDIDATE_SPEAKING');
+          setAnswerText(transcript.trim());
+        }
       };
-      recognition.onerror = () => setIsRecording(false);
-      recognition.onend = () => setIsRecording(false);
+
+      recognition.onerror = (event: any) => {
+        console.warn('Speech recognition status:', event.error);
+        if (event.error !== 'no-speech') {
+          setIsRecording(false);
+        }
+      };
+
+      recognition.onend = () => {
+        setIsRecording(false);
+      };
 
       recognitionRef.current = recognition;
       recognition.start();
     } catch (e) {
-      console.error(e);
+      console.warn('Speech recognition start failed:', e);
       setIsRecording(false);
     }
+  }, [micEnabled]);
+
+  const stopSpeechRecognition = useCallback(() => {
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+    }
+    setIsRecording(false);
+  }, []);
+
+  const toggleMicCapture = () => {
+    if (isRecording) {
+      stopSpeechRecognition();
+      setMicEnabled(false);
+    } else {
+      setMicEnabled(true);
+      startSpeechRecognition();
+    }
   };
+
+  const onAnswerTextChange = (text: string) => {
+    setAnswerText(text);
+    if (text.trim().length > 0) {
+      hasStartedAnsweringRef.current = true;
+      if (avatarMode === 'WAITING_FOR_ANSWER') {
+        setAvatarMode('CANDIDATE_SPEAKING');
+      }
+    }
+  };
+
+  // Auto-speak question when activeQuestion changes and begin 30s countdown
+  useEffect(() => {
+    if (viewState === 'live' && activeQuestion) {
+      setAnswerText('');
+      setSilenceSeconds(30);
+      hasStartedAnsweringRef.current = false;
+      setAvatarMode('AI_SPEAKING');
+
+      const timer = setTimeout(() => {
+        speakText(activeQuestion.question, () => {
+          // AI finished asking question: candidate's turn begins!
+          setAvatarMode('WAITING_FOR_ANSWER');
+          if (micEnabled) {
+            startSpeechRecognition();
+          }
+        });
+      }, 500);
+
+      return () => clearTimeout(timer);
+    }
+  }, [viewState, activeQuestion?.index, speakText, micEnabled, startSpeechRecognition]);
+
+  // 30-Second Silence Auto-Advance Countdown
+  useEffect(() => {
+    if (
+      viewState !== 'live' ||
+      avatarMode !== 'WAITING_FOR_ANSWER' ||
+      !activeQuestion ||
+      isSubmitting ||
+      showFeedbackModal
+    ) {
+      if (silenceTimerRef.current) clearInterval(silenceTimerRef.current);
+      return;
+    }
+
+    // If candidate has started speaking or typed an answer, stop the 30s timer
+    if (hasStartedAnsweringRef.current || answerText.trim().length > 0) {
+      if (silenceTimerRef.current) clearInterval(silenceTimerRef.current);
+      return;
+    }
+
+    silenceTimerRef.current = setInterval(() => {
+      setSilenceSeconds((prev) => {
+        if (prev <= 1) {
+          clearInterval(silenceTimerRef.current!);
+          handleAutoTimeout();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      if (silenceTimerRef.current) clearInterval(silenceTimerRef.current);
+    };
+  }, [viewState, avatarMode, activeQuestion, isSubmitting, showFeedbackModal, answerText]);
 
   // Start Assessment Handler
   const handleStartAssessment = async () => {
@@ -190,27 +385,24 @@ export const AdaptiveInterview: React.FC = () => {
     }
   };
 
-  // Submit Answer Handler
-  const handleSubmitAnswer = async () => {
-    if (!currentAssessment || !activeQuestion || !answerText.trim()) return;
+  // Core Submit Answer Handler
+  const submitAnswerDirect = async (ans: string) => {
+    if (!currentAssessment || !activeQuestion) return;
 
-    if (isRecording && recognitionRef.current) {
-      recognitionRef.current.stop();
-      setIsRecording(false);
-    }
-    if (isSpeaking) {
+    stopSpeechRecognition();
+    if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
-      setIsSpeaking(false);
     }
 
     setIsSubmitting(true);
+    setAvatarMode('AI_EVALUATING');
     setErrorMessage('');
 
     try {
       const evalRes = await adaptiveInterviewApi.submitAnswer(
         currentAssessment.id,
         activeQuestion.index,
-        answerText.trim()
+        ans.trim() || '[No answer provided within 30 seconds]'
       );
 
       setLastEvaluation(evalRes);
@@ -225,18 +417,44 @@ export const AdaptiveInterview: React.FC = () => {
           setSummaryReport(evalRes.summary_report);
         }
       }
+
+      // AI speaks brief evaluation feedback
+      const feedbackPraise = evalRes.is_correct
+        ? `Correct answer! Score: ${evalRes.score} out of 100.`
+        : `That was incorrect. Score: ${evalRes.score} out of 100.`;
+      speakText(`${feedbackPraise} ${evalRes.feedback || ''}`);
     } catch (err: any) {
       console.error('Failed to submit answer:', err);
       setErrorMessage(err.response?.data?.detail || 'Failed to submit answer. Please try again.');
+      setAvatarMode('WAITING_FOR_ANSWER');
     } finally {
       setIsSubmitting(false);
+      isSubmittingRef.current = false;
     }
+  };
+
+  // Submit Answer Handler (Candidate clicks submit button)
+  const handleSubmitAnswer = async () => {
+    if (!answerText.trim()) return;
+    await submitAnswerDirect(answerText.trim());
+  };
+
+  // Auto-move on 30s timeout
+  const handleAutoTimeout = async () => {
+    if (isSubmittingRef.current || isSubmitting) return;
+    isSubmittingRef.current = true;
+    setErrorMessage('30 seconds elapsed without an answer. Automatically advancing to the next question...');
+    await submitAnswerDirect('[No answer provided within 30 seconds]');
   };
 
   // Proceed to Next Question or Summary
   const handleProceedAfterEvaluation = () => {
     setShowFeedbackModal(false);
     setAnswerText('');
+    setErrorMessage('');
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
 
     if (!lastEvaluation) return;
 
@@ -579,139 +797,339 @@ export const AdaptiveInterview: React.FC = () => {
       )}
 
       {/* ────────────────────────────────────────────────────────────────────────── */}
-      {/* VIEW: LIVE INTERVIEW SESSION                                              */}
+      {/* VIEW: LIVE INTERVIEW SESSION (SPLIT-SCREEN VIDEO CALL & AI AVATAR)          */}
       {/* ────────────────────────────────────────────────────────────────────────── */}
       {viewState === 'live' && currentAssessment && activeQuestion && (
-        <div className="space-y-6">
-          {/* Live Progress Bar Card */}
-          <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div className="space-y-5">
+          {/* Top Session Status Bar */}
+          <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">
+              <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center font-bold text-sm shadow-xs">
                 Q{activeQuestion.index}
               </div>
               <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold uppercase tracking-wider text-indigo-600">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-bold uppercase tracking-wider text-purple-600">
                     Round {activeQuestion.round_number}
                   </span>
                   <span className="text-xs text-slate-400">•</span>
-                  <span className="text-xs text-slate-600 font-medium">
+                  <span className="text-xs text-slate-600 font-semibold">
                     {currentAssessment.job_category} ({currentAssessment.interview_level})
                   </span>
                 </div>
-                <div className="text-base font-bold text-slate-900">
+                <div className="text-sm sm:text-base font-extrabold text-slate-900">
                   Question {activeQuestion.index} of {currentAssessment.total_questions_asked}
                   <span className="text-xs text-slate-500 font-normal ml-2">
-                    (Max 20 questions total)
+                    (Adaptive • Max 20 Questions)
                   </span>
                 </div>
               </div>
             </div>
 
-            {/* Performance Snapshot */}
+            {/* Performance Snapshot & Actions */}
             <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
-              <div className="px-3.5 py-1.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold flex items-center gap-2">
+              <div className="px-3.5 py-1.5 rounded-xl bg-slate-100 text-slate-800 text-xs font-bold flex items-center gap-2 border border-slate-200">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                Correct: {currentAssessment.total_correct} / {activeQuestion.index - 1}
+                <span>Passed: {currentAssessment.total_correct} / {activeQuestion.index - 1}</span>
               </div>
 
               <button
                 type="button"
                 onClick={handleEndEarly}
-                className="px-3 py-1.5 rounded-xl text-rose-600 hover:bg-rose-50 border border-rose-200 text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5"
+                className="px-3 py-1.5 rounded-xl text-rose-600 hover:bg-rose-50 border border-rose-200 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                title="Finish assessment now and view AI summary"
               >
                 <StopCircle className="w-3.5 h-3.5" />
-                Finish Early
+                <span>Finish Early</span>
               </button>
             </div>
           </div>
 
-          {/* Question Card */}
-          <div className="bg-white rounded-2xl p-6 sm:p-8 border border-slate-200 shadow-sm space-y-6">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <span className="inline-block px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-semibold mb-3 border border-indigo-100">
-                  Topic: {activeQuestion.topic}
-                </span>
-                <h2 className="text-lg sm:text-xl font-bold text-slate-900 leading-relaxed">
-                  {activeQuestion.question}
-                </h2>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => handleReadAloud(activeQuestion.question)}
-                title="Read question aloud"
-                className={`p-2.5 rounded-xl border transition-all cursor-pointer shrink-0 ${
-                  isSpeaking
-                    ? 'bg-indigo-600 text-white border-indigo-600 ring-2 ring-indigo-500/20'
-                    : 'bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200'
-                }`}
-              >
-                <Volume2 className="w-5 h-5" />
-              </button>
+          {/* Alert / Notice Message */}
+          {errorMessage && (
+            <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center gap-2.5 animate-fadeIn">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span className="font-medium">{errorMessage}</span>
             </div>
+          )}
 
-            {/* Candidate Answer Box */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                  Your Technical Answer
-                </label>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-slate-400">
-                    {answerText.trim().split(/\s+/).filter(Boolean).length} words
+          {/* ═══════════════════════════════════════════════════════════════════════════ */}
+          {/* MAIN 2-COLUMN SPLIT SCREEN: AI AVATAR (LEFT) & CANDIDATE VIDEO CALL (RIGHT) */}
+          {/* ═══════════════════════════════════════════════════════════════════════════ */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 sm:gap-6 items-stretch">
+
+            {/* ═══════════════ LEFT: AI INTERVIEWER AVATAR ═══════════════ */}
+            <div
+              className={`relative rounded-3xl overflow-hidden bg-gradient-to-b from-slate-900 via-indigo-950/70 to-slate-900 border transition-all duration-500 flex flex-col justify-between p-6 sm:p-7 shadow-2xl min-h-[540px] ${
+                avatarMode === 'AI_SPEAKING'
+                  ? 'border-purple-500/80 ring-4 ring-purple-500/20 shadow-purple-900/30'
+                  : 'border-slate-800 shadow-slate-950'
+              }`}
+            >
+              {/* AI Top Info Bar */}
+              <div className="flex items-center justify-between z-10 gap-2 flex-wrap">
+                <div className="flex items-center gap-2 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/60">
+                  <Bot className="w-4 h-4 text-purple-400" />
+                  <span className="font-extrabold text-xs text-white">Dr. Gemini AI</span>
+                  <span className="text-[10px] text-purple-300 font-bold bg-purple-500/20 px-1.5 py-0.5 rounded">
+                    Lead Technical Interviewer
                   </span>
-                  <button
-                    type="button"
-                    onClick={toggleSpeechRecognition}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                      isRecording
-                        ? 'bg-rose-600 text-white animate-pulse'
-                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                    }`}
-                  >
-                    {isRecording ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
-                    {isRecording ? 'Listening...' : 'Voice Dictate'}
-                  </button>
+                </div>
+
+                {/* AI Status Badge */}
+                <div
+                  className={`flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-bold transition-all ${
+                    avatarMode === 'AI_SPEAKING'
+                      ? 'bg-purple-500/20 text-purple-200 border border-purple-400/40 shadow-xs'
+                      : avatarMode === 'AI_EVALUATING'
+                      ? 'bg-amber-500/20 text-amber-200 border border-amber-400/40'
+                      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                  }`}
+                >
+                  {avatarMode === 'AI_EVALUATING' ? (
+                    <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                  ) : (
+                    <Radio
+                      className={`w-3.5 h-3.5 ${
+                        avatarMode === 'AI_SPEAKING' ? 'text-purple-400 animate-pulse' : 'text-emerald-400'
+                      }`}
+                    />
+                  )}
+                  <span>
+                    {avatarMode === 'AI_SPEAKING'
+                      ? 'AI is speaking question...'
+                      : avatarMode === 'AI_EVALUATING'
+                      ? 'AI is analyzing your answer...'
+                      : 'AI is listening to you'}
+                  </span>
                 </div>
               </div>
 
-              <textarea
-                rows={6}
-                value={answerText}
-                onChange={(e) => setAnswerText(e.target.value)}
-                placeholder="Type your technical response here, or click 'Voice Dictate' to speak naturally..."
-                className="w-full p-4 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 text-sm leading-relaxed"
-              />
+              {/* AI Hologram Orb Animation */}
+              <div className="flex-1 flex flex-col items-center justify-center my-6 relative z-10">
+                <div className="relative flex items-center justify-center">
+                  {avatarMode === 'AI_SPEAKING' && (
+                    <>
+                      <div className="absolute w-56 h-56 rounded-full bg-purple-600/15 animate-ping duration-1000" />
+                      <div className="absolute w-44 h-44 rounded-full bg-indigo-500/25 animate-pulse" />
+                      <div className="absolute w-36 h-36 rounded-full bg-gradient-to-tr from-purple-500 to-indigo-600 blur-xl opacity-60 animate-pulse" />
+                    </>
+                  )}
+
+                  {avatarMode === 'AI_EVALUATING' && (
+                    <div className="absolute w-44 h-44 rounded-full bg-amber-500/15 animate-ping duration-1000" />
+                  )}
+
+                  <div
+                    className={`relative w-28 h-28 sm:w-36 sm:h-36 rounded-full bg-gradient-to-tr from-slate-950 via-purple-900 to-indigo-700 p-1 flex items-center justify-center shadow-2xl transition-transform duration-300 ${
+                      avatarMode === 'AI_SPEAKING' ? 'scale-105 shadow-purple-500/40' : 'scale-100 shadow-slate-900'
+                    }`}
+                  >
+                    <div className="w-full h-full rounded-full bg-slate-950/90 flex flex-col items-center justify-center relative overflow-hidden border border-purple-400/30">
+                      <div className="absolute inset-0 bg-gradient-to-t from-purple-600/20 via-transparent to-indigo-500/20 animate-pulse" />
+                      <Sparkles className="w-10 h-10 sm:w-14 sm:h-14 text-purple-300 drop-shadow-[0_0_12px_rgba(168,85,247,0.7)]" />
+                      <span className="text-[9px] font-black text-indigo-200 tracking-widest uppercase mt-1">
+                        Gemini Live AI
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* AI Voice Waveform */}
+                <div className="flex items-center gap-1.5 mt-6 h-8">
+                  {avatarMode === 'AI_SPEAKING' ? (
+                    <>
+                      <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-1" />
+                      <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-2" />
+                      <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-3" />
+                      <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-4" />
+                      <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-5" />
+                      <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-2" />
+                      <span className="w-1.5 bg-gradient-to-t from-purple-500 to-indigo-400 rounded-full animate-wave-1" />
+                    </>
+                  ) : (
+                    <div className="flex items-center gap-1 opacity-30">
+                      {[1, 2, 3, 4, 5, 6, 7].map((b) => (
+                        <span key={b} className="w-1.5 h-1.5 bg-slate-500 rounded-full" />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Question Dialogue Box */}
+              <div className="z-10 bg-slate-900/90 backdrop-blur-md p-4 rounded-2xl border border-slate-800 text-xs text-slate-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-bold text-[10px] uppercase tracking-wider border border-purple-400/30">
+                      Topic: {activeQuestion.topic}
+                    </span>
+                    <span className="text-slate-400 text-[10px] font-mono">
+                      Q{activeQuestion.index} / {currentAssessment.total_questions_asked}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => speakText(activeQuestion.question)}
+                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-purple-300 transition-colors cursor-pointer"
+                    title="Re-play question voice"
+                  >
+                    <Volume2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <p className="text-sm sm:text-base font-bold text-white leading-relaxed">
+                  &ldquo;{activeQuestion.question}&rdquo;
+                </p>
+              </div>
             </div>
 
-            {errorMessage && (
-              <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs">
-                {errorMessage}
-              </div>
-            )}
+            {/* ═══════════════ RIGHT: CANDIDATE LIVE VIDEO CALL ═══════════════ */}
+            <div
+              className={`relative rounded-3xl overflow-hidden bg-slate-900 border transition-all duration-500 flex flex-col justify-between p-6 sm:p-7 shadow-2xl min-h-[540px] ${
+                avatarMode === 'CANDIDATE_SPEAKING'
+                  ? 'border-emerald-500/80 ring-4 ring-emerald-500/20 shadow-emerald-950/40'
+                  : 'border-slate-800 shadow-slate-950'
+              }`}
+            >
+              {/* Candidate Live Camera Feed */}
+              {cameraEnabled && (
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className={`absolute inset-0 w-full h-full object-cover z-0 transition-opacity duration-300 ${
+                    cameraStreamAvailable ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                  }`}
+                />
+              )}
 
-            {/* Action Buttons */}
-            <div className="pt-2 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={handleSubmitAnswer}
-                disabled={isSubmitting || !answerText.trim()}
-                className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm shadow-sm transition-all cursor-pointer disabled:opacity-50"
-              >
-                {isSubmitting ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    AI Analyzing Answer...
-                  </>
-                ) : (
-                  <>
-                    Submit Answer
-                    <ArrowRight className="w-4 h-4" />
-                  </>
+              {/* Fallback Overlay if camera is paused or loading */}
+              {(!cameraEnabled || !cameraStreamAvailable) && (
+                <div className="absolute inset-0 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 flex flex-col items-center justify-center z-0 p-6 text-center">
+                  <div className="w-24 h-24 rounded-full bg-slate-800/80 border-2 border-slate-700 flex items-center justify-center mb-3 text-slate-400 shadow-xl">
+                    <User className="w-12 h-12" />
+                  </div>
+                  <span className="text-sm font-bold text-slate-300">{user?.full_name || 'Candidate'}</span>
+                  <span className="text-xs text-slate-500 mt-1">
+                    {!cameraEnabled ? 'Camera paused' : 'Connecting camera stream...'}
+                  </span>
+                </div>
+              )}
+
+              {/* Soft Vignette Overlay to ensure text and buttons remain crystal clear */}
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/30 to-slate-950/80 z-[1] pointer-events-none" />
+
+              {/* Candidate Top Header & 30-Second Countdown */}
+              <div className="relative z-10 flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 bg-slate-900/85 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/60">
+                  <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="font-extrabold text-xs text-white">{user?.full_name || 'You (Candidate)'}</span>
+                  <span className="text-[10px] text-slate-400">Live Video</span>
+                </div>
+
+                {/* 30-Second Silence Auto-Advance Countdown Badge */}
+                {avatarMode === 'WAITING_FOR_ANSWER' && !hasStartedAnsweringRef.current && (
+                  <div
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${
+                      silenceSeconds <= 10
+                        ? 'bg-rose-500/25 text-rose-200 border-rose-500/50 animate-pulse shadow-md shadow-rose-900/30'
+                        : 'bg-amber-500/20 text-amber-200 border-amber-400/40'
+                    }`}
+                  >
+                    <Clock className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Answer starts within: {silenceSeconds}s</span>
+                  </div>
                 )}
-              </button>
+
+                {avatarMode === 'CANDIDATE_SPEAKING' && (
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-emerald-500/25 text-emerald-200 border border-emerald-500/40 shadow-xs">
+                    <Mic className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                    <span>Speaking Answer...</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Floating Camera & Mic Toggles */}
+              <div className="relative z-10 flex items-center justify-center gap-3 my-auto pointer-events-auto">
+                <button
+                  type="button"
+                  onClick={() => setCameraEnabled(!cameraEnabled)}
+                  className={`p-3 rounded-2xl border transition-all cursor-pointer backdrop-blur-md shadow-lg ${
+                    cameraEnabled
+                      ? 'bg-slate-800/80 hover:bg-slate-700 text-white border-slate-600'
+                      : 'bg-rose-600/90 hover:bg-rose-700 text-white border-rose-500 ring-2 ring-rose-500/30'
+                  }`}
+                  title={cameraEnabled ? 'Turn off camera' : 'Turn on camera'}
+                >
+                  {cameraEnabled ? <Camera className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={toggleMicCapture}
+                  className={`p-3 rounded-2xl border transition-all cursor-pointer backdrop-blur-md shadow-lg ${
+                    isRecording
+                      ? 'bg-emerald-600/90 hover:bg-emerald-700 text-white border-emerald-500 ring-2 ring-emerald-500/30'
+                      : 'bg-slate-800/80 hover:bg-slate-700 text-white border-slate-600'
+                  }`}
+                  title={isRecording ? 'Mute microphone' : 'Start microphone'}
+                >
+                  {isRecording ? <Mic className="w-5 h-5 animate-pulse" /> : <MicOff className="w-5 h-5" />}
+                </button>
+              </div>
+
+              {/* Bottom: Spoken Technical Response & Submit Action */}
+              <div className="relative z-10 space-y-3">
+                <div className="bg-slate-900/90 backdrop-blur-md p-3.5 rounded-2xl border border-slate-700/70 space-y-2">
+                  <div className="flex items-center justify-between text-[11px] font-semibold text-slate-300">
+                    <span className="flex items-center gap-1.5 text-emerald-400">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Live Speech Recognition & Answer
+                    </span>
+                    <span className="text-slate-400 text-[10px]">
+                      {answerText.trim()
+                        ? `${answerText.trim().split(/\s+/).filter(Boolean).length} words spoken`
+                        : 'Speak naturally into microphone'}
+                    </span>
+                  </div>
+
+                  <textarea
+                    rows={3}
+                    value={answerText}
+                    onChange={(e) => onAnswerTextChange(e.target.value)}
+                    placeholder="Speak your answer into the microphone, or type/edit here..."
+                    className="w-full p-2.5 rounded-xl bg-slate-950/80 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none leading-relaxed"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[11px] text-slate-400">
+                    {silenceSeconds > 0 && !hasStartedAnsweringRef.current
+                      ? `Auto-moves to next question if silent for ${silenceSeconds}s`
+                      : 'Ready? Submit your technical answer.'}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={handleSubmitAnswer}
+                    disabled={isSubmitting || !answerText.trim()}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs shadow-md shadow-purple-900/40 transition-all cursor-pointer inline-flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>AI Analyzing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Submit Response</span>
+                        <Send className="w-3.5 h-3.5" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -783,7 +1201,7 @@ export const AdaptiveInterview: React.FC = () => {
                       <>
                         <ThumbsDown className="w-4 h-4 text-rose-600 shrink-0" />
                         <span>
-                          Round Criteria Not Met: 0 correct answers. Live session will now conclude.
+                          Round Criteria Not Met: 0 correct answers in Round 1. Interview session will now conclude.
                         </span>
                       </>
                     )}
@@ -793,7 +1211,7 @@ export const AdaptiveInterview: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleProceedAfterEvaluation}
-                  className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm transition-all cursor-pointer shadow-sm"
+                  className="w-full py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-sm transition-all cursor-pointer shadow-sm"
                 >
                   {lastEvaluation.session_status === 'TERMINATED_EARLY' ||
                   lastEvaluation.session_status === 'COMPLETED'
