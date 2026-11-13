@@ -1,3 +1,5 @@
+import os
+import tempfile
 from typing import Any, List, Union
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from pydantic import AnyHttpUrl, EmailStr, field_validator
@@ -132,4 +134,52 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def get_upload_dir() -> str:
+    """Safely resolve the uploads directory across Windows, Docker, and Render environments.
+
+    Never crashes on permission errors; gracefully falls back to a writable temp directory if needed.
+    """
+    custom = os.getenv("UPLOAD_DIR")
+    if custom and custom.strip():
+        target = os.path.abspath(custom.strip())
+        try:
+            os.makedirs(target, exist_ok=True)
+            if os.access(target, os.W_OK):
+                return target
+        except Exception:
+            pass
+
+    # Detect environment candidates:
+    candidates: List[str] = []
+    # If running inside Linux container with /app
+    if os.name != "nt" and os.path.exists("/app"):
+        candidates.append("/app/uploads/resumes")
+
+    # Local workspace repository paths
+    candidates.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "uploads", "resumes")))
+    candidates.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "uploads", "resumes")))
+    candidates.append(os.path.abspath("./uploads/resumes"))
+
+    for c in candidates:
+        try:
+            norm = os.path.normpath(c)
+            # Guard against trying to write directly to Linux root '/'
+            if norm in ("/", "\\", "/uploads", "/uploads/resumes"):
+                continue
+            os.makedirs(norm, exist_ok=True)
+            if os.access(norm, os.W_OK):
+                return norm
+        except Exception:
+            continue
+
+    # Absolute safe fallback: system temporary directory (always writable on Linux/Render)
+    fallback = os.path.join(tempfile.gettempdir(), "ai_recruitment_uploads", "resumes")
+    try:
+        os.makedirs(fallback, exist_ok=True)
+        return fallback
+    except Exception:
+        return tempfile.gettempdir()
+
 

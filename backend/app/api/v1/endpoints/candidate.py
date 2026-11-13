@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_candidate, get_db
-from app.core.config import settings
+from app.core.config import get_upload_dir, settings
 from app.models.application import JobApplication
 from app.models.candidate import CandidateProfile
 from app.models.user import User
@@ -18,8 +18,7 @@ from app.services.storage_service import upload_resume_file
 router = APIRouter()
 
 # Storage directory for resumes
-UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "uploads", "resumes"))
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR = get_upload_dir()
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx"}
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB

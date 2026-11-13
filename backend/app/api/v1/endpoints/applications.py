@@ -12,6 +12,7 @@ from app.models.candidate import CandidateProfile
 from app.models.job import Job
 from app.models.notification import NotificationType
 from app.models.user import User, UserRole
+from app.core.config import get_upload_dir
 from app.schemas.analysis import CVAnalysisResponse
 from app.schemas.application import (
     ApplicationCreate,
@@ -399,7 +400,7 @@ async def update_application_status(
     return _serialize_application(app)
 
 
-UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "uploads", "resumes"))
+UPLOAD_DIR = get_upload_dir()
 
 
 @router.get("/{application_id}/resume")

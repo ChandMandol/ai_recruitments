@@ -29,12 +29,11 @@ from app.services.cv_analyzer import (
     get_effective_gemini_api_key,
 )
 
+from app.core.config import get_upload_dir
+
 router = APIRouter()
 
-TEMP_UPLOAD_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "uploads", "resumes")
-)
-os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
+TEMP_UPLOAD_DIR = get_upload_dir()
 
 
 @router.post("/start", response_model=AssessmentResponse, status_code=status.HTTP_201_CREATED)

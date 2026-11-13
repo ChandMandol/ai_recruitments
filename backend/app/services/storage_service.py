@@ -8,15 +8,12 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
+from app.core.config import get_upload_dir, settings
 from app.models.analysis import SystemSetting
 
 logger = logging.getLogger("ai_recruitment_hub.storage")
 
-UPLOAD_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "uploads", "resumes")
-)
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR = get_upload_dir()
 
 
 async def get_cloudinary_config_from_db_or_env(db: Optional[AsyncSession] = None) -> Dict[str, Any]:

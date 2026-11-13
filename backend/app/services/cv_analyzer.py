@@ -12,14 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.analysis import CVAnalysisReport, SystemSetting
 from app.models.application import JobApplication
+from app.core.config import get_upload_dir
 from app.models.candidate import CandidateProfile
 from app.models.job import Job
 from app.models.user import User
 
 logger = logging.getLogger("ai_recruitment_hub.cv_analyzer")
 
-UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "uploads", "resumes"))
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR = get_upload_dir()
 
 
 async def get_effective_gemini_api_key(db: AsyncSession) -> Optional[str]:
