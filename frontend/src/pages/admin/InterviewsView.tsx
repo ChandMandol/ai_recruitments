@@ -28,7 +28,11 @@ import {
 } from '../../api/interviews';
 import { jobsApi, type Job } from '../../api/jobs';
 
-export const InterviewsView: React.FC = () => {
+interface InterviewsViewProps {
+  onNavigateTab?: (tab: string) => void;
+}
+
+export const InterviewsView: React.FC<InterviewsViewProps> = ({ onNavigateTab }) => {
   const [interviews, setInterviews] = useState<InterviewSession[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [eligibleCandidates, setEligibleCandidates] = useState<EligibleCandidateItem[]>([]);
@@ -40,6 +44,8 @@ export const InterviewsView: React.FC = () => {
 
   // Modals
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+  const [modalAlert, setModalAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [seedingData, setSeedingData] = useState(false);
   const [editModalSession, setEditModalSession] = useState<InterviewSession | null>(null);
   const [cancelModalSession, setCancelModalSession] = useState<InterviewSession | null>(null);
   const [evalModalSession, setEvalModalSession] = useState<InterviewSession | null>(null);
@@ -161,23 +167,71 @@ export const InterviewsView: React.FC = () => {
   };
 
   // Open Create Modal
-  const handleOpenScheduleModal = () => {
-    // Default date to tomorrow
+  const handleOpenScheduleModal = async () => {
+    setModalAlert(null);
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     setFormDate(tomorrow.toISOString().split('T')[0]);
     setScheduleModalOpen(true);
+
+    try {
+      const res = await interviewsApi.getEligibleCandidates();
+      setEligibleCandidates(res.items);
+      if (res.items.length > 0) {
+        const isSelectedValid = res.items.some((c) => c.application_id === selectedAppId);
+        if (!isSelectedValid || !selectedAppId) {
+          setSelectedAppId(res.items[0].application_id);
+          setFormTitle(`AI Technical Interview — ${res.items[0].job_title}`);
+        }
+      } else {
+        setSelectedAppId('');
+      }
+    } catch {
+      // Non-critical
+    }
+  };
+
+  // Quick Seed Demo Candidate and Job
+  const handleSeedDemoData = async () => {
+    setSeedingData(true);
+    setModalAlert(null);
+    try {
+      const res = await interviewsApi.seedDemoData();
+      setModalAlert({
+        type: 'success',
+        message: res.message || 'Demo candidate & job ready! Candidate shortlisted.',
+      });
+      const candRes = await interviewsApi.getEligibleCandidates();
+      setEligibleCandidates(candRes.items);
+      if (candRes.items.length > 0) {
+        const target = res.application_id
+          ? candRes.items.find((c) => c.application_id === res.application_id) || candRes.items[0]
+          : candRes.items[0];
+        setSelectedAppId(target.application_id);
+        setFormTitle(`AI Technical Interview — ${target.job_title}`);
+      }
+      fetchJobs();
+      fetchInterviews();
+    } catch (err: any) {
+      setModalAlert({
+        type: 'error',
+        message: err.response?.data?.detail || 'Failed to seed sample candidate.',
+      });
+    } finally {
+      setSeedingData(false);
+    }
   };
 
   // Submit New Schedule
   const handleScheduleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setModalAlert(null);
     if (!selectedAppId) {
-      setAlert({ type: 'error', message: 'Please select a candidate to schedule.' });
+      setModalAlert({ type: 'error', message: 'Please select an eligible candidate to schedule an interview.' });
       return;
     }
     if (!formDate || !formTime) {
-      setAlert({ type: 'error', message: 'Please select both date and start time.' });
+      setModalAlert({ type: 'error', message: 'Please select both an interview date and start time.' });
       return;
     }
 
@@ -200,7 +254,7 @@ export const InterviewsView: React.FC = () => {
       fetchInterviews();
       fetchEligibleCandidates();
     } catch (err: any) {
-      setAlert({
+      setModalAlert({
         type: 'error',
         message: err.response?.data?.detail || 'Failed to schedule interview.',
       });
@@ -624,14 +678,63 @@ export const InterviewsView: React.FC = () => {
             </div>
 
             <form onSubmit={handleScheduleSubmit} className="p-6 space-y-4 text-xs">
+              {/* Modal-Internal Alert Banner */}
+              {modalAlert && (
+                <div
+                  className={`p-3 rounded-xl border flex items-start justify-between text-xs font-semibold gap-2 animate-fadeIn ${
+                    modalAlert.type === 'error'
+                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  }`}
+                >
+                  <span>{modalAlert.message}</span>
+                  <button
+                    type="button"
+                    onClick={() => setModalAlert(null)}
+                    className="cursor-pointer shrink-0 text-slate-400 hover:text-slate-700"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
               {/* Candidate Selection */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   Select Candidate & Position:
                 </label>
                 {eligibleCandidates.length === 0 ? (
-                  <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-800 text-xs">
-                    No shortlisted or applied candidates available right now.
+                  <div className="p-3.5 bg-amber-50/90 rounded-2xl border border-amber-200 text-amber-900 space-y-2">
+                    <div className="flex items-center gap-2 font-bold text-xs">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>No shortlisted or applied candidates available right now.</span>
+                    </div>
+                    <p className="text-[11px] text-amber-800 leading-relaxed">
+                      To schedule an interview, candidates must have an application in <strong>Applied</strong>, <strong>Shortlisted</strong>, or <strong>Screening</strong> status without an active appointment.
+                    </p>
+                    <div className="pt-1 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleSeedDemoData}
+                        disabled={seedingData}
+                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs flex items-center gap-1 shadow-xs cursor-pointer transition-all disabled:opacity-50"
+                      >
+                        {seedingData ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                        <span>{seedingData ? 'Setting Up...' : 'Quick Seed Demo Candidate'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScheduleModalOpen(false);
+                          if (onNavigateTab) {
+                            onNavigateTab('applicants');
+                          }
+                        }}
+                        className="px-3 py-1.5 bg-white hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-lg font-bold text-xs cursor-pointer transition-all"
+                      >
+                        Go to Applicants View
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <select
@@ -747,8 +850,13 @@ export const InterviewsView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={savingSchedule}
-                  className="px-4 py-2 text-xs font-bold bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-xl shadow-xs transition-all cursor-pointer inline-flex items-center gap-1.5"
+                  disabled={!selectedAppId || savingSchedule}
+                  className={`px-4 py-2 text-xs font-bold rounded-xl shadow-xs transition-all inline-flex items-center gap-1.5 ${
+                    !selectedAppId || savingSchedule
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                      : 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white cursor-pointer hover:shadow-md'
+                  }`}
+                  title={!selectedAppId ? 'Please select or seed an eligible candidate first' : 'Confirm and schedule interview'}
                 >
                   {savingSchedule ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Calendar className="w-3.5 h-3.5" />}
                   <span>Confirm Schedule</span>

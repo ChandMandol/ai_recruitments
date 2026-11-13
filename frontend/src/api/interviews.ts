@@ -92,6 +92,17 @@ export const interviewsApi = {
     return response.data;
   },
 
+  seedDemoData: async () => {
+    const response = await api.post<{
+      success: boolean;
+      message: string;
+      candidate_id?: string;
+      job_id?: string;
+      application_id?: string;
+    }>('/admin/seed-demo-data');
+    return response.data;
+  },
+
   // Candidate endpoints
   getMyInterviews: async () => {
     const response = await api.get<InterviewListResponse>('/interviews/my');

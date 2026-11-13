@@ -5,7 +5,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_admin, get_db
 from app.core.config import settings
+from app.core.security import get_password_hash
 from app.models.analysis import SystemSetting
+from app.models.application import ApplicationStatus, JobApplication
+from app.models.candidate import CandidateProfile
 from app.models.job import Job
 from app.models.user import User, UserRole
 from app.schemas.analysis import GeminiConfigResponse, GeminiConfigUpdate
@@ -187,4 +190,108 @@ async def clear_gemini_config(
         await db.commit()
 
     return {"message": "Database Gemini API Key cleared. System will now use environment variables if present."}
+
+
+@router.post("/seed-demo-data")
+async def seed_demo_data(
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only: Seed or reset sample candidate, job opening, and application for testing interview scheduling."""
+    # 1. Ensure Demo Candidate exists
+    demo_email = "candidate.demo@example.com"
+    cand_stmt = select(User).where(User.email == demo_email)
+    candidate_user = (await db.execute(cand_stmt)).scalars().first()
+    if not candidate_user:
+        candidate_user = User(
+            email=demo_email,
+            password_hash=get_password_hash("Candidate@123"),
+            full_name="Demo Candidate",
+            role=UserRole.CANDIDATE.value,
+            is_active=True,
+            is_verified=True,
+        )
+        db.add(candidate_user)
+        await db.flush()
+
+    # 2. Ensure Candidate Profile & resume exist
+    prof_stmt = select(CandidateProfile).where(CandidateProfile.user_id == candidate_user.id)
+    profile = (await db.execute(prof_stmt)).scalars().first()
+    if not profile:
+        profile = CandidateProfile(
+            user_id=candidate_user.id,
+            headline="Full-Stack Software Engineer",
+            skills=["Java", "Spring Boot", "React", "TypeScript", "PostgreSQL", "Docker"],
+            resume_url="/uploads/resumes/demo_candidate_resume.pdf",
+            resume_filename="demo_candidate_resume.pdf",
+        )
+        db.add(profile)
+        await db.flush()
+    elif not profile.resume_url:
+        profile.resume_url = "/uploads/resumes/demo_candidate_resume.pdf"
+        profile.resume_filename = "demo_candidate_resume.pdf"
+        db.add(profile)
+        await db.flush()
+
+    # 3. Ensure at least one published job exists
+    job_stmt = select(Job).where(Job.is_published == True).order_by(Job.created_at.desc())
+    job = (await db.execute(job_stmt)).scalars().first()
+    if not job:
+        job = Job(
+            title="Java Developer",
+            department="Engineering",
+            location="Remote",
+            employment_type="FULL_TIME",
+            experience="3-5 years",
+            salary="$95,000 - $125,000",
+            description="We are seeking an experienced Java Developer skilled in Spring Boot, microservices, and database architecture.",
+            responsibilities="Develop scalable backend microservices, write automated tests, and collaborate with frontend developers.",
+            required_skills=["Java", "Spring Boot", "PostgreSQL", "Docker", "REST APIs"],
+            status="PUBLISHED",
+            is_published=True,
+            created_by_id=current_admin.id,
+        )
+        db.add(job)
+        await db.flush()
+
+    # 4. Ensure candidate has an application with SHORTLISTED or APPLIED status
+    app_stmt = select(JobApplication).where(
+        JobApplication.candidate_id == candidate_user.id,
+        JobApplication.job_id == job.id,
+    ).order_by(JobApplication.created_at.desc())
+    application = (await db.execute(app_stmt)).scalars().first()
+    if not application:
+        application = JobApplication(
+            job_id=job.id,
+            candidate_id=candidate_user.id,
+            resume_url="/uploads/resumes/demo_candidate_resume.pdf",
+            resume_filename="demo_candidate_resume.pdf",
+            cover_letter="I am very excited about the Java Developer position. I have 4 years of hands-on experience building distributed systems with Spring Boot.",
+            status=ApplicationStatus.SHORTLISTED.value,
+            ai_match_score=88,
+            ai_match_summary="Strong match with required Java and Spring Boot backend requirements.",
+        )
+        db.add(application)
+        await db.flush()
+    else:
+        # If it was rejected or in another status, reset to SHORTLISTED so admin can schedule
+        if application.status not in [
+            ApplicationStatus.SHORTLISTED.value,
+            ApplicationStatus.APPLIED.value,
+            ApplicationStatus.SCREENING.value,
+        ]:
+            application.status = ApplicationStatus.SHORTLISTED.value
+            db.add(application)
+            await db.flush()
+
+    await db.commit()
+
+    return {
+        "success": True,
+        "message": f"Demo data ready! Candidate '{candidate_user.full_name}' is shortlisted for '{job.title}'.",
+        "candidate_id": candidate_user.id,
+        "job_id": job.id,
+        "application_id": application.id,
+    }
+
 

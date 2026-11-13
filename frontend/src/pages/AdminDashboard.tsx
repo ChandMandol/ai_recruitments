@@ -63,7 +63,7 @@ export const AdminDashboard: React.FC = () => {
       )}
       {activeTab === 'jobs' && <JobManagement />}
       {activeTab === 'applicants' && <ApplicantsView />}
-      {activeTab === 'interviews' && <InterviewsView />}
+      {activeTab === 'interviews' && <InterviewsView onNavigateTab={setActiveTab} />}
       {activeTab === 'evaluations' && <EvaluationsView />}
       {activeTab === 'results' && <ResultsView />}
       {activeTab === 'settings' && <AdminSettings />}

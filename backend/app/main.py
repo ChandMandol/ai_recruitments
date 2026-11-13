@@ -3,13 +3,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from app.api.v1.router import api_router
 from app.api.v1.endpoints.websocket_interview import router as ws_interview_router
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, Base, engine
 from app.core.security import get_password_hash
 from app.core.security_headers import SecurityHeadersMiddleware
+from app.models.application import ApplicationStatus, JobApplication
+from app.models.candidate import CandidateProfile
+from app.models.job import Job
 from app.models.user import User, UserRole
 
 # Logging configuration
@@ -21,14 +24,14 @@ logger = logging.getLogger("ai_recruitment_hub")
 
 
 async def seed_initial_superadmin():
-    """Seed default superadmin and demo candidate on startup if database has no admin."""
+    """Seed default superadmin, demo candidate, demo jobs, and shortlisted application on startup."""
     async with AsyncSessionLocal() as session:
         try:
             # 1. Super Admin Seed
             stmt = select(User).where(User.email == settings.FIRST_SUPERADMIN_EMAIL.lower())
             result = await session.execute(stmt)
-            existing_admin = result.scalar_one_or_none()
-            if not existing_admin:
+            admin_user = result.scalars().first()
+            if not admin_user:
                 admin_user = User(
                     email=settings.FIRST_SUPERADMIN_EMAIL.lower(),
                     password_hash=get_password_hash(settings.FIRST_SUPERADMIN_PASSWORD),
@@ -38,6 +41,7 @@ async def seed_initial_superadmin():
                     is_verified=True,
                 )
                 session.add(admin_user)
+                await session.flush()
                 logger.info(f"Default Super Admin seeded: {settings.FIRST_SUPERADMIN_EMAIL}")
             else:
                 logger.info("Super Admin already exists.")
@@ -46,8 +50,8 @@ async def seed_initial_superadmin():
             demo_email = "candidate.demo@example.com"
             demo_stmt = select(User).where(User.email == demo_email)
             demo_result = await session.execute(demo_stmt)
-            existing_candidate = demo_result.scalar_one_or_none()
-            if not existing_candidate:
+            candidate_user = demo_result.scalars().first()
+            if not candidate_user:
                 candidate_user = User(
                     email=demo_email,
                     password_hash=get_password_hash("Candidate@123"),
@@ -57,7 +61,88 @@ async def seed_initial_superadmin():
                     is_verified=True,
                 )
                 session.add(candidate_user)
+                await session.flush()
                 logger.info(f"Default Demo Candidate seeded: {demo_email}")
+
+            # 3. Demo Candidate Profile & Resume
+            cand_profile_stmt = select(CandidateProfile).where(CandidateProfile.user_id == candidate_user.id)
+            profile = (await session.execute(cand_profile_stmt)).scalars().first()
+            if not profile:
+                profile = CandidateProfile(
+                    user_id=candidate_user.id,
+                    headline="Full-Stack Engineer & AI Specialist",
+                    skills=["Java", "Spring Boot", "React", "PostgreSQL", "Docker", "FastAPI"],
+                    resume_url="/uploads/resumes/demo_candidate_resume.pdf",
+                    resume_filename="demo_candidate_resume.pdf",
+                )
+                session.add(profile)
+                await session.flush()
+            elif not profile.resume_url:
+                profile.resume_url = "/uploads/resumes/demo_candidate_resume.pdf"
+                profile.resume_filename = "demo_candidate_resume.pdf"
+                session.add(profile)
+                await session.flush()
+
+            # 4. Demo Job Seed (if no jobs exist)
+            job_count_stmt = select(func.count()).select_from(Job)
+            job_count = (await session.execute(job_count_stmt)).scalar() or 0
+            primary_job = None
+            if job_count == 0:
+                jobs_to_seed = [
+                    Job(
+                        title="Java Developer",
+                        department="Engineering",
+                        location="Remote",
+                        employment_type="FULL_TIME",
+                        experience="3-5 years",
+                        salary="$95,000 - $125,000",
+                        description="We are seeking an experienced Java Developer skilled in Spring Boot, microservices architecture, and cloud deployment.",
+                        responsibilities="Build scalable backend services, design REST APIs, optimize database queries, write automated tests.",
+                        required_skills=["Java", "Spring Boot", "PostgreSQL", "Docker", "REST API"],
+                        status="PUBLISHED",
+                        is_published=True,
+                        created_by_id=admin_user.id,
+                    ),
+                    Job(
+                        title="Lead Full Stack AI Engineer",
+                        department="AI Research & Engineering",
+                        location="Hybrid",
+                        employment_type="FULL_TIME",
+                        experience="5+ years",
+                        salary="$130,000 - $165,000",
+                        description="Lead the design and implementation of AI-driven recruitment platforms using Gemini Live, Python FastAPI, and React.",
+                        responsibilities="Architect WebRTC media pipelines, integrate multimodal LLMs, mentor engineering team.",
+                        required_skills=["Python", "FastAPI", "React", "TypeScript", "Gemini API", "WebRTC"],
+                        status="PUBLISHED",
+                        is_published=True,
+                        created_by_id=admin_user.id,
+                    ),
+                ]
+                session.add_all(jobs_to_seed)
+                await session.flush()
+                primary_job = jobs_to_seed[0]
+                logger.info("Default demo jobs seeded.")
+            else:
+                first_job_stmt = select(Job).limit(1)
+                primary_job = (await session.execute(first_job_stmt)).scalars().first()
+
+            # 5. Demo Job Application (if candidate has no applications)
+            if primary_job and candidate_user:
+                app_stmt = select(JobApplication).where(JobApplication.candidate_id == candidate_user.id)
+                existing_app = (await session.execute(app_stmt)).scalars().first()
+                if not existing_app:
+                    demo_application = JobApplication(
+                        job_id=primary_job.id,
+                        candidate_id=candidate_user.id,
+                        resume_url="/uploads/resumes/demo_candidate_resume.pdf",
+                        resume_filename="demo_candidate_resume.pdf",
+                        cover_letter="I am excited to apply for this role with extensive background in distributed backend microservices.",
+                        status=ApplicationStatus.SHORTLISTED.value,
+                        ai_match_score=88,
+                        ai_match_summary="Strong alignment with core requirements: Java, Spring Boot, REST APIs, and database architecture.",
+                    )
+                    session.add(demo_application)
+                    logger.info("Default demo job application seeded (Status: SHORTLISTED).")
 
             await session.commit()
         except Exception as e:
